@@ -1,20 +1,6 @@
 """
 01_waveguide_modes.py
-======================
-Task 4, step 1 -- the FOUNDATION of everything else.
 
-Goal
-----
-Solve the guided optical modes of a straight silicon-on-insulator (SOI) strip
-waveguide and extract the numbers that every later step (single ring, two-ring
-Vernier, fabrication-variability study) will consume:
-
-    * n_eff(lambda)  -- effective index of each mode  (the eigenvalue)
-    * the mode profiles                                (the eigenvectors)
-    * n_g            -- group index, from the dispersion n_eff(lambda)
-
-Run (inside the femwell venv):
-    python 01_waveguide_modes.py
 """
 
 from collections import OrderedDict
@@ -118,9 +104,8 @@ def modes_at_design_wavelength():
           "      TE1 sits at/below the cladding index (1.44), i.e. not guided.")
     return labelled
 
-
+###################################################
 def plot_first_two_modes(labelled):
-    """Save a figure with the dominant field component of the first two modes."""
     fig, axes = plt.subplots(1, 2, figsize=(10, 3.6))
     for ax, (label, m) in zip(axes, labelled[:2]):
         comp = "x" if polarisation(m) == "TE" else "y"  # dominant transverse E component
@@ -138,6 +123,7 @@ def plot_first_two_modes(labelled):
 # ---------------------------------------------------------------------------
 # 4. Dispersion: sweep wavelength -> n_eff(lambda) -> group index n_g
 # ---------------------------------------------------------------------------
+
 def dispersion_sweep(lam_min=1.50, lam_max=1.60, n_points=11):
     """Track the fundamental (TE0) mode vs wavelength and compute the group index.
 
