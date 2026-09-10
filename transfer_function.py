@@ -85,7 +85,7 @@ print(f"n_eff at {pump_nm:.0f} nm (TE0, from Femwell) = "
       f"{np.interp(pump_nm, wavelength_list, neff_list):.4f}")
 
 # =============================================================================
-# 2. Dispersion: n_eff(lambda) spline -> n_g, FSR   (Bogaerts 2012, Eqs. 2-4)
+# 2. Dispersion: n_eff(lambda) spline -> n_g, FSR
 # =============================================================================
 neff_spl = UnivariateSpline(wavelength_list, neff_list, s=0, k=3)
 dneff_spl = neff_spl.derivative(1)
