@@ -38,16 +38,18 @@ def build_mesh(width, height):
     return from_meshio(mesh_from_OrderedDict(polygon, resolutions, default_resolution_max=2))
 
 
-# Sellmeier equations (Si: Salzberg & Villa 1957 / Tatian 1984 fit,
-# verified against refractiveindex.info; SiO2: Malitson 1965)
+# Use sellmeier equation to determine the refractive index of material
 def n_Si(wavelength):
-    if not (1.357 <= wavelength <= 11.04):
-        raise ValueError(f"wavelength {wavelength} um out of range for Si")
-    l2 = wavelength ** 2
-    n2_minus_1 = (10.6684293 * l2 / (l2 - 0.301516485 ** 2)
-                  + 0.0030434748 * l2 / (l2 - 1.13475115 ** 2)
-                  + 1.54133408 * l2 / (l2 - 1104 ** 2))
-    return math.sqrt(n2_minus_1 + 1)
+    # https://refractiveindex.info/?shelf=main&book=Si&page=Salzberg
+    if (1.357 <= wavelength <= 11.04):
+        l2 = wavelength ** 2
+        return math.sqrt(
+            10.6684293 * l2 / (l2 - 0.301516485 ** 2)
+            + 0.0030434748 * l2 / (l2 - 1.13475115 ** 2)
+            + 1.54133408 * l2 / (l2 - 1104 ** 2) 
+            + 1)
+    else:
+        raise ValueError(f"wavelength provided is {wavelength}um, is out of the range for Si")
 
 
 def n_SiO2(wavelength):
