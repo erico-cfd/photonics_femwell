@@ -116,8 +116,7 @@ if m1 % 2 == 0:
 L1 = m1 * pump_nm * 1e-9 / n_eff(pump_nm)
 FSR1_nm = pump_nm ** 2 / (n_g(pump_nm) * L1 * 1e9)
 
-# Ring 2: EXACTLY half the perimeter of ring 1 -- this is the Vernier
-# idea read off the professor's slide.
+# Ring 2: half the perimeter of ring 1
 L2 = L1 / 2
 
 # resonance condition: theta(lam)
