@@ -180,7 +180,13 @@ def D_ps_nm_km(l_nm):
 print(f"n_eff({pump_nm:.0f}) = {n_eff(pump_nm):.5f}   n_g = {n_g(pump_nm):.4f}   "
       f"A_eff = {A_eff_um2:.3f} um^2")
 print(f"beta2 = {beta2(pump_nm):.3e} s^2/m   D = {D_ps_nm_km(pump_nm):+.0f} ps/(nm km) "
-      f"({'normal' if D_ps_nm_km(pump_nm) > 0 else 'anomalous'} dispersion)")
+      f"({'ANOMALOUS' if D_ps_nm_km(pump_nm) > 0 else 'normal'} dispersion; "
+      f"Agrawal: D>0 <=> beta2<0 <=> anomalous, as in SMF-28 at 1550 nm with D=+17)")
+print("  -> anomalous GVD is the FAVOURABLE regime for SFWM: the nonlinear phase 2*gamma*P")
+print("     (>0) can be compensated by the linear term beta2*dw^2 (<0) [AGRAWAL13 sec 10.2;")
+print("     MEDINA24 sec 3.3.1: 'small anomalous dispersion is generally considered the most")
+print("     favorable case']. Same sign as Dulkeith 2006 (525x226 nm wire, D=+4400), ~10x smaller")
+print("     in magnitude: GVD is very sensitive to exact width/height/cladding -- cross-check advised.")
 
 # Phase matching Delta_k = k_s + k_i - 2 k_p, with omega_s,i = omega_p +/- Delta_Omega
 # [REF: AGRAWAL13 §10.2; MEDINA24 Eqs. 2.11-2.14]. Linear term only [ASSUMPTION].
@@ -191,7 +197,7 @@ lam_i_nm = 2 * np.pi * c / (omega_p - dOmega) * 1e9
 k = lambda l: 2 * np.pi * n_eff(l) / l                    # rad/nm
 delta_k_per_m = (k(lam_s_nm) + k(lam_i_nm) - 2 * k(pump_nm)) * 1e9
 sinc2 = lambda x: np.sinc(x / np.pi) ** 2
-print("Phase matching: |Delta_k| grows monotonically (normal dispersion).")
+print("Phase matching: |Delta_k| < 0 and grows in magnitude with detuning (anomalous dispersion).")
 i_fsr = np.argmin(np.abs(pump_nm - lam_s_nm - 9.1))
 # CRITICAL [REF: SAVANIER16, Appendix]: inside a RING the length entering the sinc
 # is NOT the circumference L but the "unfolded" length L_res = L * F/pi (number of
@@ -580,10 +586,17 @@ print("     'actively tuned' requirement of every demonstration [ARXIV2411; MEDI
 fig, ax = plt.subplots(2, 3, figsize=(16, 9))
 
 # (a) dispersion + FSR drift  -- [minutes: plot (FSR - <FSR>) vs omega]
-lf = np.linspace(1450, 1650, 60); FSRf = pump_nm ** 2 / (n_g(lf) * L1 * 1e9)
-ax[0, 0].plot(c / (lf * 1e-9) * 1e-12, FSRf - FSRf.mean()); ax[0, 0].axhline(0, color="gray", ls="--")
-ax[0, 0].set_xlabel("optical frequency (THz)"); ax[0, 0].set_ylabel("FSR1 - <FSR1> (nm)")
-ax[0, 0].set_title(f"[T4-1] FSR drift, D = {D_ps_nm_km(pump_nm):+.0f} ps/(nm km)")
+# FSR in FREQUENCY units: FSR_nu = c/(n_g L) [RABUS07 Eq. 2.21; supervisor's note].
+# This isolates the dispersion effect: FSR_nu is constant iff n_g is constant iff
+# beta2 = 0. (In wavelength units the lambda^2 factor adds a trivial, non-dispersive
+# drift that would mask the physics.)
+lf = np.linspace(1450, 1650, 60); nuf = c / (lf * 1e-9)
+FSRnu_GHz = c / (n_g(lf) * L1) * 1e-9
+ax[0, 0].plot(nuf * 1e-12, FSRnu_GHz - FSRnu_GHz.mean()); ax[0, 0].axhline(0, color="gray", ls="--")
+ax[0, 0].set_xlabel("optical frequency (THz)"); ax[0, 0].set_ylabel(r"FSR$_\nu$ - <FSR$_\nu$> (GHz)")
+ax[0, 0].set_title(f"[T4-1] FSR drift from GVD (D = {D_ps_nm_km(pump_nm):+.0f} ps/(nm km), anomalous)")
+print(f"\nFSR_nu drift over 1450-1650 nm: {FSRnu_GHz.max()-FSRnu_GHz.min():.1f} GHz peak-to-peak "
+      f"about {FSRnu_GHz.mean():.0f} GHz  (beta2 -> 0 would flatten this)")
 
 # (b) combs + T(omega)
 span = 2.6 * FSR1_nm; lams = np.linspace(pump_nm - span, pump_nm + span, 20001)
