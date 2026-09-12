@@ -1,4 +1,7 @@
+
 """
+lambda/(2 Delta N_ef) where delta N_ef = Ne_f(symmetrical) - Nef_(antisymmetrical)
+
 task4_vernier_pump_rejection.py
 ================================
 Task 4 (core task) -- Generation of photon pairs in silicon photonics using
@@ -480,12 +483,11 @@ print(f"supermode kappa_z(g): " + ", ".join(f"{g:.0f} nm -> {k:.4f} rad/um" for 
 print(f"fit kappa_z = {kappa_0:.3f} exp(-g/{1e3/gamma_g:.0f} nm)   (decay length {1e3/gamma_g:.0f} nm)")
 
 
-def K_power(gap_nm, R_eff_um):
-    """Power coupling |kappa|^2 of a curved coupler with effective radius R_eff
-    [RABUS07 Eq. 2.66-2.70 structure; Gaussian integral of the exponential gap law]."""
-    k_z = kappa_0 * np.exp(-gamma_g * gap_nm * 1e-3)
-    L_eff = np.sqrt(2 * np.pi * R_eff_um / gamma_g)                            # um
-    return np.sin(k_z * L_eff) ** 2, L_eff
+L_couple_um = 5.0   # comprimento do acoplador (escolha de projeto / racetrack)
+# changed this after fiday meeting
+def K_power(gap_nm, L_um):
+    k_z = kappa_0 * np.exp(-gamma_g * gap_nm * 1e-3)   # = πΔn/λ  [rad/µm]
+    return np.sin(k_z * L_um) ** 2, L_um               # eq 4.8: |κ|² = sin²(k_z·L)
 
 
 R1_um, R2_um = K["L1"] / 2 / np.pi * 1e6, K["L2"] / 2 / np.pi * 1e6
