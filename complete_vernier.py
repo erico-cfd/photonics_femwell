@@ -165,6 +165,32 @@ m_te0.show("I", colorbar=True)
 plt.title(f"TE0 intensity, {typ['width_nm']:.0f} x {typ['height_nm']:.0f} nm SOI strip @ {pump_nm:.0f} nm "
           f"(n_eff = {np.real(m_te0.n_eff):.4f}, TE fraction = {np.real(m_te0.te_fraction):.2f})")
 plt.savefig("task4_mode_profile_TE0.png", dpi=180); plt.close()
+# --- [T4-0] NUMERICAL VALIDATION: is the mode solver converged? --------------
+# Not a physics result, but without it none of the physics numbers mean anything.
+print("\n[T4-0] Convergence of the mode solver")
+_conv = []
+for _rc in (0.04, 0.02, 0.01):
+    _n = np.real(te0(strip_mesh(w_um, h_um), pump_nm * 1e-3).n_eff) if _rc == 0.02 else None
+    if _n is None:
+        _mesh = strip_mesh(w_um, h_um)   # rebuild with a different core resolution
+        _core = shapely.geometry.box(-w_um / 2, 0, w_um / 2, h_um)
+        _clad = shapely.geometry.box(-4 * w_um, 0, 4 * w_um, 6 * h_um)
+        _box = shapely.geometry.box(-4 * w_um, -6 * h_um, 4 * w_um, 0)
+        _res = dict(core={"resolution": _rc, "distance": 0.3},
+                    clad={"resolution": 0.05, "distance": 0.3},
+                    box={"resolution": 0.05, "distance": 0.3})
+        _mesh = from_meshio(mesh_from_OrderedDict(
+            OrderedDict(core=_core, clad=_clad, box=_box), _res, default_resolution_max=2))
+        _n = np.real(te0(_mesh, pump_nm * 1e-3).n_eff)
+    _conv.append((_rc, _n))
+    print(f"  core mesh {_rc:.3f} um: n_eff = {_n:.6f}")
+CONV = _conv
+print(f"  -> n_eff still drifting by {abs(_conv[-1][1]-_conv[1][1]):.1e} between 0.02 and 0.01 um.")
+print("     The ABSOLUTE n_eff carries a discretisation error of ~1.5e-3 (converged ~2.4471).")
+print("     It does NOT propagate: n_eff enters only (i) self-consistent sizing, where L")
+print("     absorbs the error exactly, and (ii) DIFFERENCES between rings, which converge")
+print("     to 4 digits (checked below). Domain size is converged to 5e-5 (4w x 6h).")
+
 print(f"TE0 @ {pump_nm:.0f} nm: n_eff = {np.real(m_te0.n_eff):.5f}, TE fraction = {np.real(m_te0.te_fraction):.3f}, "
       f"power in core = {np.real(m_te0.calculate_power(elements='core')):.3f}  -> task4_mode_profile_TE0.png")
 wl_nm = np.linspace(1400, 1700, 16)
@@ -192,6 +218,10 @@ spl_R2 = UnivariateSpline(wl_bent, neff_R2, s=0, k=3)
 n_eff_R1 = lambda l: spl_R1(l)
 n_eff_R2 = lambda l: spl_R2(l)
 n_g_R1 = lambda l: spl_R1(l) - l * spl_R1.derivative(1)(l)
+# n_g is ring-specific too: v_g = c/n_g and T_rt = n_g L/c, and the bend changes
+# BOTH n_eff and its dispersion. Using n_g_R1 for ring 2 would be the same class of
+# error as using the straight index for a ring [REF: RABUS07 Eq. 2.20 applied per ring].
+n_g_R2 = lambda l: spl_R2(l) - l * spl_R2.derivative(1)(l)
 d1, d2 = spl.derivative(1), spl.derivative(2)
 n_eff = lambda l: spl(l)
 n_g = lambda l: spl(l) - l * d1(l)                       # [REF: RABUS07 Eq. 2.20; BOG12]
@@ -215,6 +245,19 @@ print(f"\nBENT-mode indices [RABUS07: theta uses the ring mode]:")
 print(f"  straight        n_eff = {n_eff(pump_nm):.5f}")
 print(f"  R1 = {R1_design:.2f} um     n_eff = {n_eff_R1(pump_nm):.5f}  ({n_eff_R1(pump_nm)-n_eff(pump_nm):+.5f})")
 print(f"  R2 = {R2_design:.2f} um      n_eff = {n_eff_R2(pump_nm):.5f}  ({n_eff_R2(pump_nm)-n_eff(pump_nm):+.5f})")
+# Bend correction vs radius: verifies the 1/R^2 scaling and shows WHY this project
+# needs bent modes while MEDINA24 (R = 120 um) does not.
+BEND_R, BEND_DN = [], []
+for _R in (20.0, 10.0, 5.0, 3.0):
+    _dn_R = np.real(te0(mesh0, pump_nm * 1e-3, radius=_R).n_eff) - n_eff(pump_nm)
+    BEND_R.append(_R); BEND_DN.append(float(_dn_R))
+print("\nBend correction vs radius (expect ~1/R^2):")
+for _R, _d in zip(BEND_R, BEND_DN):
+    print(f"  R = {_R:5.1f} um: dn = {_d:+.3e}")
+_ext = BEND_DN[0] * (20.0 / 120.0) ** 2
+print(f"  extrapolated to R = 120 um (MEDINA24's rings): dn ~ {_ext:.1e} -- negligible.")
+print(f"  Our rings are 12x smaller AND have different radii, so the bent mode is required.")
+
 _dn = n_eff_R2(pump_nm) - n_eff_R1(pump_nm)
 print(f"  DIFFERENTIAL n_2 - n_1 = {_dn:+.5f}  ->  if L2 = L1/2 exactly, ring 2 would be")
 print(f"  detuned by lambda*dn/n_g = {pump_nm*_dn/n_g(pump_nm):.2f} nm from the signal; the 2:1 condition")
@@ -408,6 +451,16 @@ for A_ref, QU_ref in ((0.74, 9.2e5), (1.23, 5.6e5)):
     QU_ours = 2 * np.pi * 4.2 / (pump_nm * 1e-9 * A_ref * 100 / 4.3429)
     print(f"  VALIDATION [SAVANIER16]: alpha = {A_ref} dB/cm -> Q_U ours {QU_ours:.2e} "
           f"vs measured {QU_ref:.1e} ({(QU_ours/QU_ref-1)*100:+.0f} %)")
+# Coupling regime in the standard microwave metric [REF: POZAR12 Eq. 6.76]:
+#   g = Q_0/Q_e ; g < 1 undercoupled, g = 1 CRITICAL, g > 1 overcoupled.
+# (POZAR12 sec 6.1 also gives 1/Q_L = 1/Q_e + 1/Q_0, the relation used above;
+#  Rabus's ring theory imports this microwave formalism wholesale.)
+g_regime = Q_o / Q_e
+print(f"Coupling regime [POZAR12 Eq. 6.76]: g = Q_0/Q_e = {g_regime:.1f} -> "
+      f"{'UNDER' if g_regime < 1 else 'CRITICALLY' if abs(g_regime-1) < 0.1 else 'OVER'}-coupled")
+print(f"  MEDINA24 sec 3.3.2 and SAVANIER16 recommend critical or slightly over-coupled")
+print(f"  (g ~ 1-2); the PGR optimum of ARXIV2411 Eq. S2 is g = 4/3. We sit {g_regime/(4/3):.0f}x")
+print("  past it -- kappa_1 was chosen for the FILTER, not for the source.")
 print(f"Optimal coupling for max PGR: Q_e/Q_o = 3/4  [REF: ARXIV2411 Eq. S2, r_e = 4/3 r_o]; "
       f"here Q_e/Q_o = {Q_e/Q_o:.2f}")
 print(f"PGR (Eq. S1, calibrated) = {PGR_ours*1e-6:.2f} MHz/mW^2  "
@@ -489,7 +542,7 @@ print("0 or 1 = ring 2 resonant, 0.5 = anti-resonant):")
 # criterion in LINEWIDTHS, not in fraction of 2pi: a residue of 0.027*2pi looks
 # small but is ~494 pm = 10 linewidths at Q ~ 3e4, i.e. fully off resonance.
 _fwhm_pm = pump_nm / Q_tot * 1e3
-_dth_dlam = 2 * np.pi * n_g(pump_nm) * K["L2"] / (pump_nm * 1e-9) ** 2      # rad/m
+_dth_dlam = 2 * np.pi * n_g_R2(pump_nm) * K["L2"] / (pump_nm * 1e-9) ** 2   # ring 2
 for nm_, l_ in (("pump", pump_nm), ("signal", K["ls"]), ("idler", K["li"])):
     frac = (theta2(l_, K["L2"]) / (2 * np.pi)) % 1.0
     res = min(frac, 1 - frac)
@@ -542,12 +595,12 @@ print("[T4-4c] Decay rates, extraction efficiency, stored energy, extended FSR")
 print("=" * 78)
 _k1, _t1, _k2, _t2, _k3, _t3 = couplers(typ["K1_percent"] / 100)
 T_rt1 = n_g_R1(pump_nm) * K["L1"] / c
-T_rt2 = n_g_R1(pump_nm) * K["L2"] / c
+T_rt2 = n_g_R2(pump_nm) * K["L2"] / c
 alpha_pow = 2 * B_of(typ["A_dB_per_cm"]) * 100          # power attenuation, 1/m
 g_i1 = _k1 ** 2 / T_rt1        # input bus <-> R1   (slide: gamma_1)
 g_12 = _k2 / np.sqrt(T_rt1 * T_rt2)   # R1 <-> R2   (coupling rate)
 g_2d = _k3 ** 2 / T_rt2        # R2 <-> drop bus    (slide: gamma_aux)
-g_i = alpha_pow * c / n_g_R1(pump_nm)                   # intrinsic (slide: gamma_i)
+g_i = alpha_pow * c / n_g_R1(pump_nm)                   # intrinsic in R1 (slide: gamma_i)
 
 print(f"round-trip times: T_rt1 = {T_rt1*1e12:.3f} ps, T_rt2 = {T_rt2*1e12:.3f} ps")
 print(f"{'':14}{'k (field)':>11}{'t':>10}{'g = rate (1/s)':>18}{'Q = omega/g':>14}")
@@ -590,7 +643,7 @@ print("  P/g_total, ~40x smaller here because the coupling rates dominate the lo
 
 # --- FSR_ext = m1 FSR1 = m2 FSR2 ---
 FSR1_c = pump_nm ** 2 / (n_g_R1(pump_nm) * K["L1"] * 1e9)
-FSR2_c = pump_nm ** 2 / (n_g_R1(pump_nm) * K["L2"] * 1e9)
+FSR2_c = pump_nm ** 2 / (n_g_R2(pump_nm) * K["L2"] * 1e9)   # n_g of RING 2
 m1_v, m2_v = 2, 1                                    # our 2:1 Vernier, co-prime
 print(f"\nFSR_ext = m1 FSR1 = m2 FSR2, (m1,m2) = ({m1_v},{m2_v}) co-prime "
       f"[RABUS07 Eqs. 2.77-2.78; GRIFFEL00]:")
@@ -738,6 +791,29 @@ print("     shorter decay length) and need a pulley coupler. Our decay length "
 
 # --- gap tolerance: the coupling is the most fabrication-sensitive parameter ---
 dK_dg = -2 * gamma_g * 1e-3          # d ln K / d gap  (per nm), from K ~ exp(-2 gamma g)
+# --- Does the neighbouring waveguide perturb n_eff itself? -------------------
+# The supermode SPLITTING (n_even - n_odd) is the coupling, already modelled.
+# The supermode MEAN is shifted from the isolated n_eff -- a second-order effect
+# that the point-coupler model ignores. RABUS07 sec 2.1.2 warns about exactly this:
+# the coupler phase "affects the output characteristics, not only in the magnitude
+# but also in the resonant conditions" (Eqs. 2.56-2.57, not implemented here).
+print("\nCoupler perturbation of n_eff (limitation of the point-coupler model):")
+PERT_G, PERT_D, PERT_PM = [], [], []
+_n_iso = n_eff(pump_nm)
+for _g in (150, 200, 300, 500):
+    _kz, _ne, _no = kappa_z_of_gap(_g, pump_nm * 1e-3)
+    _shift = (_ne + _no) / 2 - _n_iso
+    _Leff = K_power(_g, R_bus1)[1]
+    _dphi = 2 * np.pi * _shift * _Leff / (pump_nm * 1e-3)
+    _dlam_pm = _dphi / (2 * np.pi) * pump_nm ** 2 / (n_g(pump_nm) * K["L1"] * 1e9) * 1e3
+    PERT_G.append(_g); PERT_D.append(float(_shift)); PERT_PM.append(float(_dlam_pm))
+    print(f"  gap {_g:3d} nm: <n_supermode> - n_isolated = {_shift:+.2e} -> "
+          f"resonance shift {_dlam_pm:+6.1f} pm")
+print(f"  (linewidth = {pump_nm/Q_tot*1e3:.0f} pm) At the 151 nm gap the design needs, the")
+print("  coupler shifts the resonance by about ONE linewidth. The common-mode part is")
+print("  absorbed by the heater; the differential part (gaps 151 vs 405 nm) is not.")
+print("  Opening the gap to 300 nm -- which a racetrack allows at equal kappa -- removes it.")
+
 print(f"\nGap sensitivity: d ln|kappa|^2 / d gap = {dK_dg*100:+.1f} % per nm.")
 for dg in (5.0, 10.0):
     print(f"  +/-{dg:.0f} nm of gap (THOMSON16 linewidth control) -> K1 x {np.exp(dK_dg*dg):.2f} / "
@@ -793,66 +869,264 @@ print("     'actively tuned' requirement of every demonstration [ARXIV2411; MEDI
 
 
 # =============================================================================
-# FIGURES
+# EXTRA SWEEP: inter-ring coupling kappa2 ("does it work with the frequency
+# splitting?" -- minutes of 09/09)
 # =============================================================================
-fig, ax = plt.subplots(2, 3, figsize=(16, 9))
+from scipy.signal import argrelextrema
 
-# (a) dispersion + FSR drift  -- [minutes: plot (FSR - <FSR>) vs omega]
-# FSR in FREQUENCY units: FSR_nu = c/(n_g L) [RABUS07 Eq. 2.21; supervisor's note].
-# This isolates the dispersion effect: FSR_nu is constant iff n_g is constant iff
-# beta2 = 0. (In wavelength units the lambda^2 factor adds a trivial, non-dispersive
-# drift that would mask the physics.)
-lf = np.linspace(1450, 1650, 60); nuf = c / (lf * 1e-9)
-FSRnu_GHz = c / (n_g(lf) * L1) * 1e-9
-ax[0, 0].plot(nuf * 1e-12, FSRnu_GHz - FSRnu_GHz.mean()); ax[0, 0].axhline(0, color="gray", ls="--")
-ax[0, 0].set_xlabel("optical frequency (THz)"); ax[0, 0].set_ylabel(r"FSR$_\nu$ - <FSR$_\nu$> (GHz)")
-ax[0, 0].set_title(f"[T4-1] FSR drift from GVD (D = {D_ps_nm_km(pump_nm):+.0f} ps/(nm km), anomalous)")
-print(f"\nFSR_nu drift over 1450-1650 nm: {FSRnu_GHz.max()-FSRnu_GHz.min():.1f} GHz peak-to-peak "
-      f"about {FSRnu_GHz.mean():.0f} GHz  (beta2 -> 0 would flatten this)")
+k2_sw = np.logspace(np.log10(0.002), np.log10(0.12), 12)
 
-# (b) combs + T(omega)
-span = 2.6 * FSR1_nm; lams = np.linspace(pump_nm - span, pump_nm + span, 20001)
-out = np.array([series_rings(l, K["L1"], K["L2"], typ["K1_percent"] / 100, typ["A_dB_per_cm"]) for l in lams])
-ax[0, 1].plot(lams - pump_nm, abs(out[:, 2]) ** 2 / abs(out[:, 2]).max() ** 2, label="R1 build-up", lw=0.8)
-ax[0, 1].plot(lams - pump_nm, abs(out[:, 3]) ** 2 / abs(out[:, 3]).max() ** 2, label="R2 build-up", lw=0.8)
-ax[0, 1].plot(lams - pump_nm, abs(out[:, 1]) ** 2, label="T_drop", color="tab:green")
-for l, col in ((pump_nm, "k"), (K["ls"], "r"), (K["li"], "b")):
-    ax[0, 1].axvline(l - pump_nm, color=col, ls=":", lw=1)
-ax[0, 1].set_xlabel("$\\lambda-\\lambda_p$ (nm)"); ax[0, 1].set_title("[T4-4] two combs and T_drop (p, s, i)")
-ax[0, 1].legend(fontsize=7)
 
-# (c) T_drop / T_through log
-ax[0, 2].semilogy(lams - pump_nm, abs(out[:, 1]) ** 2, color="tab:green", label="T_drop")
-ax[0, 2].semilogy(lams - pump_nm, abs(out[:, 0]) ** 2, color="tab:red", label="T_through")
-ax[0, 2].axhline(1e-10, color="gray", ls="--", lw=1, label="-100 dB"); ax[0, 2].set_ylim(1e-12, 2)
-ax[0, 2].set_xlabel("$\\lambda-\\lambda_p$ (nm)"); ax[0, 2].set_title("[T4-4] pump rejection at the drop port")
-ax[0, 2].legend(fontsize=7)
+def kpis_k2(k2v):
+    """KPIs with kappa2 overridden alone, to isolate the onset of mode splitting."""
+    L1_, L2_, _ = size_rings(typ["r1_um"])
+    K1_ = typ["K1_percent"] / 100
+    k1_, t1_ = np.sqrt(K1_), np.sqrt(1 - K1_)
+    k3_, t3_ = k1_ / np.sqrt(2), np.sqrt(1 - K1_ / 2)
+    t2_ = np.sqrt(1 - k2v ** 2)
+    A_ = typ["A_dB_per_cm"]
 
-# (d) K1 sweep
-ax[1, 0].semilogx(K1_sw, [x["rej_dB"] for x in res_K1], "o-", label="rejection (dB)")
-ax[1, 0].axhspan(100, 120, color="red", alpha=0.12, label="100-120 dB target")
-ax[1, 0].set_xlabel("K1 (%)"); ax[1, 0].set_ylabel("dB"); ax[1, 0].legend(fontsize=7)
-axb = ax[1, 0].twinx(); axb.semilogx(K1_sw, [x["Ts"] for x in res_K1], "s--", color="tab:orange")
-axb.set_ylabel("T_drop(signal)", color="tab:orange"); ax[1, 0].set_title("[T4-4] bus coupling sweep")
+    def sr(l_nm):
+        a1 = np.sqrt(alpha_of(A_, L1_)) * np.exp(1j * theta1(l_nm, L1_) / 2)
+        a2 = np.sqrt(alpha_of(A_, L2_)) * np.exp(
+            1j * 2 * np.pi * n_eff_R2(l_nm) * L2_ / (l_nm * 1e-9) / 2)
+        Mx = np.array([[1 - t1_ * t2_ * a1 ** 2, t1_ * a1 * k2v * a2],
+                       [-t3_ * a2 * k2v * a1, 1 - t3_ * t2_ * a2 ** 2]])
+        E1a_, E2b_ = np.linalg.solve(Mx, [-k1_, 0.0])
+        E2a_ = k2v * a1 * E1a_ + t2_ * a2 * E2b_
+        return abs(k3_ * a2 * E2a_) ** 2
 
-# (e) loss and radius sweeps
-ax[1, 1].plot(A_sw, [x["Ts"] for x in res_A], "o-", label="T_drop(signal) vs loss A")
-ax[1, 1].set_xlabel("loss A (dB/cm)"); ax[1, 1].set_ylabel("T_drop(signal)")
-axc = ax[1, 1].twiny(); axc.plot(r_sw, [x["Ts"] for x in res_r], "s--", color="tab:purple")
-axc.set_xlabel("radius r1 (um)", color="tab:purple"); ax[1, 1].set_title("[T4-4] loss and radius sweeps")
-ax[1, 1].legend(fontsize=7)
+    win = np.linspace(K["ls"] - 0.3, K["ls"] + 0.3, 1500)
+    Td = np.array([sr(l) for l in win])
+    pk = Td.max()
+    npk = int(sum(Td[argrelextrema(Td, np.greater)[0]] > 0.95 * pk))
+    return pk, npk
 
-# (f) fabrication tolerance
-ax[1, 2].plot(dw_diff, Ts_tol, color="tab:orange", label="T_drop(signal)")
-ax[1, 2].set_xlabel("differential width error R2 - R1 (nm)"); ax[1, 2].set_ylabel("T_drop(signal)")
-axd = ax[1, 2].twinx(); axd.plot(dw_diff, ER_tol, color="tab:green"); axd.set_ylabel("extinction (dB)", color="tab:green")
-ax[1, 2].axvspan(-5, 5, color="gray", alpha=0.08); ax[1, 2].set_xlim(-3, 3)
-ax[1, 2].set_title("[T4-5] tolerance (THOMSON16: +/-5 nm; ARXIV2411: sigma 1.73 nm)")
-ax[1, 2].legend(fontsize=7)
 
-fig.suptitle("Task 4 -- Vernier double-ring SFWM source and pump filter (pump = 1550 nm)")
-fig.tight_layout(); fig.savefig("task4_results.png", dpi=180)
-print("\nFigure: task4_results.png")
+res_k2 = [kpis_k2(x) for x in k2_sw]
+k2_butter = couplers(typ["K1_percent"] / 100)[2]
+print("\nSweep of the inter-ring coupling (minutes: 'frequency splitting?'):")
+_split = [x for x, r_ in zip(k2_sw, res_k2) if r_[1] > 1]
+if _split:
+    print(f"  splitting sets in at kappa2 ~ {min(_split):.4f}")
+else:
+    print("  no splitting over the swept range")
+print(f"  design value kappa2 = {k2_butter:.4f} (Butterworth) -> single peak.")
+
+# =============================================================================
+# FIGURES -- one per assignment item, so each consigne maps to one picture
+# =============================================================================
+lf = np.linspace(1450, 1650, 80)
+
+# ---- FIG 1 [T4-1] straight waveguide ---------------------------------------
+f1, a1x = plt.subplots(1, 3, figsize=(15, 4.2))
+a1x[0].plot(lf, n_eff(lf), label=r"$n_{eff}$ (TE$_0$)")
+a1x[0].plot(wl_nm, neff, "o", ms=3, color="tab:blue")
+a1x[0].plot(lf, n_g(lf), label=r"$n_g$")
+a1x[0].axvline(pump_nm, color="green", ls=":", lw=1)
+a1x[0].set_xlabel("wavelength (nm)"); a1x[0].set_ylabel("index")
+a1x[0].set_title("(a) dispersion relationship")
+a1x[0].legend(fontsize=8); a1x[0].grid(alpha=.3)
+
+a1x[1].plot(lf, [D_ps_nm_km(l) for l in lf])
+a1x[1].axhline(0, color="gray", ls="--", lw=1)
+a1x[1].axvline(pump_nm, color="green", ls=":", lw=1)
+a1x[1].set_xlabel("wavelength (nm)"); a1x[1].set_ylabel("D (ps/(nm km))")
+a1x[1].set_title(f"(b) GVD: D = {D_ps_nm_km(pump_nm):+.0f}, ANOMALOUS")
+a1x[1].grid(alpha=.3)
+
+dOm_THz = dOmega / (2 * np.pi) * 1e-12
+a1x[2].plot(dOm_THz, sinc2(delta_k_per_m * L_phys / 2),
+            label=f"straight, L = {L_phys*1e6:.0f} um")
+a1x[2].plot(dOm_THz, sinc2(delta_k_per_m * L_res / 2),
+            label=f"ring, L$_{{res}}$ = {L_res*1e3:.1f} mm")
+a1x[2].axvline(dOmega[i_fsr] / (2 * np.pi) * 1e-12, color="red", ls=":", lw=1,
+               label="1 FSR (signal)")
+a1x[2].set_xlabel(r"$\Delta\Omega/2\pi$ (THz)")
+a1x[2].set_ylabel(r"sinc$^2(\Delta k L/2)$")
+a1x[2].set_title("(c) phase matching [SAVANIER16 App.]")
+a1x[2].legend(fontsize=7); a1x[2].grid(alpha=.3)
+f1.suptitle("[T4-1] Straight SOI waveguide: dispersion relationships and phase matching")
+f1.tight_layout(); f1.savefig("fig1_T4-1_waveguide.png", dpi=170); plt.close(f1)
+
+# ---- FIG 2 numerical validation --------------------------------------------
+f2, a2x = plt.subplots(1, 3, figsize=(15, 4.2))
+a2x[0].plot([c_[0] for c_ in CONV], [c_[1] for c_ in CONV], "o-")
+a2x[0].axhline(2.4471, color="gray", ls="--", lw=1, label="Richardson limit")
+a2x[0].invert_xaxis()
+a2x[0].set_xlabel("core mesh size (um)"); a2x[0].set_ylabel(r"$n_{eff}$")
+a2x[0].set_title("(a) mesh convergence"); a2x[0].legend(fontsize=8); a2x[0].grid(alpha=.3)
+
+_Rf = np.array(BEND_R)
+a2x[1].loglog(_Rf, np.abs(BEND_DN), "o-", label="Femwell bent mode")
+a2x[1].loglog(_Rf, abs(BEND_DN[0]) * (_Rf / _Rf[0]) ** -2.0, "--", color="gray",
+              label=r"$1/R^2$")
+a2x[1].axvline(120, color="tab:red", ls=":", label="MEDINA24 rings (120 um)")
+a2x[1].set_xlabel("bend radius (um)")
+a2x[1].set_ylabel(r"$|n_{eff,bent}-n_{eff,straight}|$")
+a2x[1].set_title("(b) why THIS project needs bent modes")
+a2x[1].legend(fontsize=7); a2x[1].grid(alpha=.3, which="both")
+
+a2x[2].semilogy(PERT_G, np.abs(PERT_PM), "o-", color="tab:purple")
+a2x[2].axhline(pump_nm / Q_tot * 1e3, color="red", ls="--", label="1 linewidth")
+a2x[2].axvline(design_gaps["bus <-> R1"], color="green", ls=":", label="design gap")
+a2x[2].set_xlabel("coupler gap (nm)"); a2x[2].set_ylabel("resonance shift (pm)")
+a2x[2].set_title("(c) coupler perturbs $n_{eff}$ [RABUS07 2.56-2.57]")
+a2x[2].legend(fontsize=7); a2x[2].grid(alpha=.3, which="both")
+f2.suptitle("Numerical validation: is the model converged, and what does it neglect?")
+f2.tight_layout(); f2.savefig("fig2_validation.png", dpi=170); plt.close(f2)
+
+# ---- FIG 3 [T4-3] the ring --------------------------------------------------
+f3, a3x = plt.subplots(1, 3, figsize=(15, 4.2))
+FSRnu = c / (n_g_R1(lf) * K["L1"]) * 1e-9
+a3x[0].plot(c / (lf * 1e-9) * 1e-12, FSRnu - FSRnu.mean())
+a3x[0].axhline(0, color="gray", ls="--")
+a3x[0].set_xlabel("optical frequency (THz)")
+a3x[0].set_ylabel(r"FSR$_\nu-\langle$FSR$_\nu\rangle$ (GHz)")
+a3x[0].set_title(r"(a) FSR drift $\Leftrightarrow\ \beta_2\neq 0$  [minutes]")
+a3x[0].grid(alpha=.3)
+
+Qo_s, Qe_s, g_s = [], [], []
+for x in K1_sw:
+    qo, qe = Q_factors(K["L1"], typ["A_dB_per_cm"], x / 100)
+    Qo_s.append(qo); Qe_s.append(qe); g_s.append(qo / qe)
+a3x[1].loglog(K1_sw, Qo_s, label=r"$Q_0$ (intrinsic)")
+a3x[1].loglog(K1_sw, Qe_s, label=r"$Q_e$ (external)")
+a3x[1].loglog(K1_sw, [1 / (1 / a + 1 / b) for a, b in zip(Qo_s, Qe_s)], label=r"$Q_L$ (loaded)")
+a3x[1].axvline(typ["K1_percent"], color="k", ls=":", lw=1)
+a3x[1].set_xlabel("K1 (%)"); a3x[1].set_ylabel("Q")
+a3x[1].set_title("(b) Q factors [POZAR12 6.1; SAVANIER16 4-5]")
+a3x[1].legend(fontsize=7); a3x[1].grid(alpha=.3, which="both")
+
+a3x[2].loglog(K1_sw, g_s, "o-", color="tab:orange")
+a3x[2].axhline(1, color="red", ls="--", label="critical (g=1)")
+a3x[2].axhline(4 / 3, color="green", ls=":", label="PGR optimum (g=4/3)")
+a3x[2].axvline(typ["K1_percent"], color="k", ls=":", lw=1, label="our design")
+a3x[2].set_xlabel("K1 (%)"); a3x[2].set_ylabel(r"$g=Q_0/Q_e$")
+a3x[2].set_title("(c) coupling regime [POZAR12 6.76]")
+a3x[2].legend(fontsize=7); a3x[2].grid(alpha=.3, which="both")
+f3.suptitle("[T4-3] Ring resonator: FSR drift, quality factors, coupling regime")
+f3.tight_layout(); f3.savefig("fig3_T4-3_ring.png", dpi=170); plt.close(f3)
+
+# ---- FIG 4 [T4-4] the Vernier filter ---------------------------------------
+span = 2.6 * FSR1_nm
+lams = np.linspace(pump_nm - span, pump_nm + span, 24001)
+out = np.array([series_rings(l, K["L1"], K["L2"], typ["K1_percent"] / 100,
+                             typ["A_dB_per_cm"]) for l in lams])
+f4, a4x = plt.subplots(3, 1, figsize=(10, 10), sharex=True)
+a4x[0].plot(lams - pump_nm, abs(out[:, 2]) ** 2 / (abs(out[:, 2]) ** 2).max(),
+            lw=.8, color="tab:blue")
+a4x[0].set_ylabel("ring 1\n(generator)")
+a4x[1].plot(lams - pump_nm, abs(out[:, 3]) ** 2 / (abs(out[:, 3]) ** 2).max(),
+            lw=.8, color="tab:orange")
+a4x[1].set_ylabel("ring 2\n(filter)")
+a4x[2].semilogy(lams - pump_nm, abs(out[:, 1]) ** 2, color="tab:green", label=r"$T_{drop}$")
+a4x[2].semilogy(lams - pump_nm, abs(out[:, 0]) ** 2, color="tab:red", label=r"$T_{through}$")
+a4x[2].axhline(1e-10, color="gray", ls="--", lw=1, label="-100 dB target")
+a4x[2].set_ylim(1e-11, 3); a4x[2].set_ylabel("transmission")
+a4x[2].legend(fontsize=8); a4x[2].set_xlabel(r"$\lambda-\lambda_p$ (nm)")
+for ax_ in a4x:
+    for l_, col in ((pump_nm, "k"), (K["ls"], "r"), (K["li"], "b")):
+        ax_.axvline(l_ - pump_nm, color=col, ls=":", lw=1)
+    ax_.grid(alpha=.3)
+for l_, col, tx in ((pump_nm, "k", "p"), (K["ls"], "r", "s"), (K["li"], "b", "i")):
+    a4x[0].text(l_ - pump_nm, 1.04, tx, color=col, ha="center",
+                transform=a4x[0].get_xaxis_transform())
+f4.suptitle("[T4-4] The two frequency combs and the transfer function T(omega)")
+f4.tight_layout(); f4.savefig("fig4_T4-4_vernier.png", dpi=170); plt.close(f4)
+
+# ---- FIG 5 [T4-4b] couplings from geometry ---------------------------------
+f5, a5x = plt.subplots(1, 3, figsize=(15, 4.2))
+gg = np.linspace(120, 430, 90)
+a5x[0].semilogy(gaps_nm, kz, "o", label="Femwell supermodes")
+a5x[0].semilogy(gg, kappa_0 * np.exp(-gamma_g * gg * 1e-3), "-",
+                label=f"fit, decay {1e3/gamma_g:.0f} nm")
+a5x[0].set_xlabel("gap (nm)"); a5x[0].set_ylabel(r"$\kappa_z$ (rad/um)")
+a5x[0].set_title("(a) coupling vs gap [CHROST15 Eq. 4.3]")
+a5x[0].legend(fontsize=7); a5x[0].grid(alpha=.3, which="both")
+
+a5x[1].semilogy(gg, np.pi / (2 * kappa_0 * np.exp(-gamma_g * gg * 1e-3)), label="ours")
+a5x[1].plot([200], [37.5], "r*", ms=15, label="CHROST15 Fig. 4.14b")
+a5x[1].set_xlabel("gap (nm)"); a5x[1].set_ylabel(r"cross-over length $L_x$ (um)")
+a5x[1].set_title("(b) validation on the same 500x220 nm strip")
+a5x[1].legend(fontsize=7); a5x[1].grid(alpha=.3, which="both")
+
+for nm_, key_, Reff, kt, col in (("bus<->R1", "bus <-> R1", R_bus1, k1d, "tab:blue"),
+                                 ("R1<->R2", "R1 <-> R2 ", R_12, k2d, "tab:orange"),
+                                 ("R2<->drop", "R2 <-> bus", R_bus2, k3d, "tab:green")):
+    a5x[2].semilogy(gg, [K_power(x, Reff)[0] for x in gg], color=col, label=nm_)
+    a5x[2].plot([design_gaps[key_]], [kt ** 2], "o", color=col, ms=9)
+a5x[2].set_xlabel("gap (nm)"); a5x[2].set_ylabel(r"$|\kappa|^2$")
+a5x[2].set_title("(c) design points: 151 / 405 / 151 nm")
+a5x[2].legend(fontsize=7); a5x[2].grid(alpha=.3, which="both")
+f5.suptitle("[T4-4b] The six coupling coefficients from the real gap geometry")
+f5.tight_layout(); f5.savefig("fig5_T4-4b_couplings.png", dpi=170); plt.close(f5)
+
+# ---- FIG 6 parameter sweeps -------------------------------------------------
+f6, a6x = plt.subplots(2, 2, figsize=(12, 8.5))
+ax_ = a6x[0, 0]
+ax_.semilogx(K1_sw, [x["rej_dB"] for x in res_K1], "o-", label="rejection (dB)")
+ax_.axhspan(100, 120, color="red", alpha=.12, label="100-120 dB target")
+ax_.set_xlabel("K1 (%)"); ax_.set_ylabel("dB")
+ax_.legend(fontsize=7); ax_.grid(alpha=.3); ax_.set_title("(a) bus coupling K1")
+axb = ax_.twinx(); axb.semilogx(K1_sw, [x["Ts"] for x in res_K1], "s--", color="tab:orange")
+axb.set_ylabel(r"$T_{drop}$(signal)", color="tab:orange")
+
+ax_ = a6x[0, 1]
+ax_.plot(A_sw, [x["Ts"] for x in res_A], "o-", color="tab:blue")
+ax_.set_xlabel("propagation loss A (dB/cm)"); ax_.set_ylabel(r"$T_{drop}$(signal)")
+ax_.set_title("(b) loss -- 'include the losses'"); ax_.grid(alpha=.3)
+axb = ax_.twinx(); axb.plot(A_sw, [x["ER_dB"] for x in res_A], "s--", color="tab:green")
+axb.set_ylabel("extinction (dB)", color="tab:green")
+
+ax_ = a6x[1, 0]
+ax_.plot(r_sw, [x["Ts"] for x in res_r], "o-", color="tab:purple")
+ax_.set_xlabel(r"ring radius $r_1$ (um)"); ax_.set_ylabel(r"$T_{drop}$(signal)")
+ax_.set_title("(c) radius"); ax_.grid(alpha=.3)
+axb = ax_.twinx()
+axb.plot(r_sw, [pump_nm ** 2 / (n_g_R1(pump_nm) * x["L1"] * 1e9) for x in res_r],
+         "s--", color="tab:brown")
+axb.set_ylabel("FSR (nm)", color="tab:brown")
+
+ax_ = a6x[1, 1]
+ax_.semilogx(k2_sw, [r_[0] for r_ in res_k2], "o-", label=r"peak $T_{drop}$")
+ax_.axvline(k2_butter, color="k", ls=":", label=f"Butterworth {k2_butter:.4f}")
+if _split:
+    ax_.axvspan(min(_split), k2_sw[-1], color="red", alpha=.12, label="mode splitting")
+ax_.set_xlabel(r"$\kappa_2$ (inter-ring)"); ax_.set_ylabel(r"peak $T_{drop}$")
+ax_.set_title("(d) inter-ring coupling: frequency splitting")
+ax_.legend(fontsize=7); ax_.grid(alpha=.3, which="both")
+f6.suptitle("Parameter sweeps [minutes: 'sweep the list of parameters, include the losses']")
+f6.tight_layout(); f6.savefig("fig6_sweeps.png", dpi=170); plt.close(f6)
+
+# ---- FIG 7 [T4-5] fabrication tolerance ------------------------------------
+f7, a7x = plt.subplots(1, 2, figsize=(11, 4.4))
+a7x[0].plot(dw_diff, Ts_tol, color="tab:orange", label=r"$T_{drop}$(signal)")
+a7x[0].axhline(0.5 * K["Ts"], color="gray", ls="--", lw=1, label="half extraction")
+a7x[0].set_xlabel("differential width error R2 - R1 (nm)")
+a7x[0].set_ylabel(r"$T_{drop}$(signal)")
+a7x[0].set_xlim(-1, 1); a7x[0].legend(fontsize=7); a7x[0].grid(alpha=.3)
+a7x[0].set_title("(a) DIFFERENTIAL error: tolerance +/-0.07 nm")
+axb = a7x[0].twinx(); axb.plot(dw_diff, ER_tol, color="tab:green")
+axb.set_ylabel("extinction (dB)", color="tab:green")
+
+_dw = np.linspace(-5, 5, 60)
+a7x[1].plot(_dw, _dw * shift_pm_per_nm * 1e-3, color="tab:blue", label="comb shift")
+a7x[1].axhspan(-FSR1_nm / 2, FSR1_nm / 2, color="green", alpha=.1, label=r"$\pm$FSR/2")
+a7x[1].axhline(0.62, color="red", ls="--", lw=1, label="ARXIV2411 heater range")
+a7x[1].axhline(-0.62, color="red", ls="--", lw=1)
+a7x[1].set_xlabel("common-mode width error (nm)")
+a7x[1].set_ylabel("resonance shift (nm)")
+a7x[1].set_title("(b) COMMON-mode: needs active trimming")
+a7x[1].legend(fontsize=7); a7x[1].grid(alpha=.3)
+f7.suptitle("[T4-5] Device parameter variability from clean-room imperfections")
+f7.tight_layout(); f7.savefig("fig7_T4-5_tolerance.png", dpi=170); plt.close(f7)
+
+print("\nFigures written:")
+for fn in ("fig1_T4-1_waveguide", "fig2_validation", "fig3_T4-3_ring",
+           "fig4_T4-4_vernier", "fig5_T4-4b_couplings", "fig6_sweeps",
+           "fig7_T4-5_tolerance", "task4_mode_profile_TE0"):
+    print(f"  {fn}.png")
 
 
 # =============================================================================
