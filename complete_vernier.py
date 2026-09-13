@@ -43,6 +43,11 @@ References used (short keys):
             > 100 dB, ~60 dB at sub-filter FSRs, < 1 dB IL), Fig. 2 (heater
             0.62 nm range, 0.6 pm LSB).
   GENTRY18  C. M. Gentry, PhD thesis, Univ. Colorado Boulder (2018).
+  CHROST15  Chrostowski & Hochberg, Silicon Photonics Design, Cambridge (2015), sec 4.1:
+            supermode method Eqs. 4.1-4.5 (kappa^2 = sin^2(C L), C = pi dn/lambda, L_x = lambda/2dn),
+            bend contribution Eq. 4.13 (z_bend), Fig. 4.14 strip 500x220 nm: L_x(200 nm gap,
+            1550 nm) ~ 37.5 um, L_x 46 -> 31.5 um over 1.50-1.60 um; measured z_bend 2.3-2.8 um;
+            eigenmode L_x 15.5 um vs measured 16.2-16.8 um (rib) -> fabrication-limited.
   KUMAR20   Kumar, Wu, Tsang, Opt. Lett. 45, 1289 (2020)  [cascaded CROW, > 110 dB].
   AFIFI21   Afifi et al., Opt. Express 29, 25173 (2021)  [CDC filters: 60 dB measured
             vs 157 dB modelled -- scattered-light floor].
@@ -134,13 +139,18 @@ def strip_mesh(w_um, h_um):
                                              res, default_resolution_max=2))
 
 
-def te0(mesh, lam_um):
-    """Fundamental TE mode (highest TE fraction) [REF: FEMWELL 'waveguide_modes']."""
+def te0(mesh, lam_um, radius=np.inf):
+    """Fundamental TE mode (highest TE fraction) [REF: FEMWELL 'waveguide_modes'].
+    radius=R gives the BENT-waveguide mode: Femwell applies the conformal map
+    epsilon -> epsilon*(1 + x/R)^2, so the core must be centred at x = 0 and R is
+    then the radius measured to the CENTRE of the waveguide -- exactly Rabus's
+    convention: "r being the radius of the ring measured from the center of the
+    ring to the center of the waveguide" [REF: RABUS07, text after Eq. 2.3]."""
     b = Basis(mesh, ElementTriP0())
     eps = b.zeros()
     for dom, nf in {"core": n_Si, "clad": n_SiO2, "box": n_SiO2}.items():
         eps[b.get_dofs(elements=dom)] = nf(lam_um) ** 2
-    modes = compute_modes(b, eps, wavelength=lam_um, num_modes=3, order=1)
+    modes = compute_modes(b, eps, wavelength=lam_um, num_modes=3, order=1, radius=radius)
     return modes.sorted(key=lambda m: -np.real(m.te_fraction))[0]
 
 
@@ -149,6 +159,14 @@ print("\n" + "=" * 78)
 print("[T4-1] Straight waveguide: Femwell sweep (n_eff, n_g, GVD, A_eff)")
 print("=" * 78)
 mesh0 = strip_mesh(w_um, h_um)
+# Mode profile figure (assignment item "mode profiles") [REF: FEMWELL waveguide_modes]
+m_te0 = te0(mesh0, pump_nm * 1e-3)
+m_te0.show("I", colorbar=True)
+plt.title(f"TE0 intensity, {typ['width_nm']:.0f} x {typ['height_nm']:.0f} nm SOI strip @ {pump_nm:.0f} nm "
+          f"(n_eff = {np.real(m_te0.n_eff):.4f}, TE fraction = {np.real(m_te0.te_fraction):.2f})")
+plt.savefig("task4_mode_profile_TE0.png", dpi=180); plt.close()
+print(f"TE0 @ {pump_nm:.0f} nm: n_eff = {np.real(m_te0.n_eff):.5f}, TE fraction = {np.real(m_te0.te_fraction):.3f}, "
+      f"power in core = {np.real(m_te0.calculate_power(elements='core')):.3f}  -> task4_mode_profile_TE0.png")
 wl_nm = np.linspace(1400, 1700, 16)
 neff, aeff = [], []
 for wl in wl_nm:
@@ -158,6 +176,22 @@ for wl in wl_nm:
 neff, aeff = np.array(neff), np.array(aeff)
 
 spl = UnivariateSpline(wl_nm, neff, s=0, k=3)
+
+# --- BENT-mode indices, per RABUS07: theta uses the index of the "ring mode" ---
+# [REF: RABUS07 text after Eq. 2.3] "c the phase velocity of the RING MODE
+# (c = c0/n_eff)". The straight-guide index is only an approximation to it; the
+# curvature correction scales as ~1/R^2 and is therefore DIFFERENT for R1 and R2,
+# which is what breaks the L2 = L1/2 coincidence if it is ignored.
+R1_design = typ["r1_um"]
+R2_design = R1_design / 2
+wl_bent = np.linspace(1450, 1650, 7)          # coarser: the correction is smooth in lambda
+neff_R1 = np.array([np.real(te0(mesh0, l * 1e-3, radius=R1_design).n_eff) for l in wl_bent])
+neff_R2 = np.array([np.real(te0(mesh0, l * 1e-3, radius=R2_design).n_eff) for l in wl_bent])
+spl_R1 = UnivariateSpline(wl_bent, neff_R1, s=0, k=3)
+spl_R2 = UnivariateSpline(wl_bent, neff_R2, s=0, k=3)
+n_eff_R1 = lambda l: spl_R1(l)
+n_eff_R2 = lambda l: spl_R2(l)
+n_g_R1 = lambda l: spl_R1(l) - l * spl_R1.derivative(1)(l)
 d1, d2 = spl.derivative(1), spl.derivative(2)
 n_eff = lambda l: spl(l)
 n_g = lambda l: spl(l) - l * d1(l)                       # [REF: RABUS07 Eq. 2.20; BOG12]
@@ -177,6 +211,14 @@ def D_ps_nm_km(l_nm):
     return -(2 * np.pi * c / (l_nm * 1e-9) ** 2) * beta2(l_nm) * 1e12 * 1e-9 * 1e3
 
 
+print(f"\nBENT-mode indices [RABUS07: theta uses the ring mode]:")
+print(f"  straight        n_eff = {n_eff(pump_nm):.5f}")
+print(f"  R1 = {R1_design:.2f} um     n_eff = {n_eff_R1(pump_nm):.5f}  ({n_eff_R1(pump_nm)-n_eff(pump_nm):+.5f})")
+print(f"  R2 = {R2_design:.2f} um      n_eff = {n_eff_R2(pump_nm):.5f}  ({n_eff_R2(pump_nm)-n_eff(pump_nm):+.5f})")
+_dn = n_eff_R2(pump_nm) - n_eff_R1(pump_nm)
+print(f"  DIFFERENTIAL n_2 - n_1 = {_dn:+.5f}  ->  if L2 = L1/2 exactly, ring 2 would be")
+print(f"  detuned by lambda*dn/n_g = {pump_nm*_dn/n_g(pump_nm):.2f} nm from the signal; the 2:1 condition")
+print(f"  theta_2 = theta_1/2 therefore requires L2 = (L1/2)*n_1/n_2 = (L1/2)*{n_eff_R1(pump_nm)/n_eff_R2(pump_nm):.5f}.")
 print(f"n_eff({pump_nm:.0f}) = {n_eff(pump_nm):.5f}   n_g = {n_g(pump_nm):.4f}   "
       f"A_eff = {A_eff_um2:.3f} um^2")
 print(f"beta2 = {beta2(pump_nm):.3e} s^2/m   D = {D_ps_nm_km(pump_nm):+.0f} ps/(nm km) "
@@ -224,15 +266,29 @@ print(f"     phase matching WOULD limit the design at higher Q or wider signal-i
 # literature spread (4-6)e-18]. Undepleted CW pump, no TPA [ASSUMPTION].
 n2_Si = 4.5e-18
 gamma_nl = 2 * np.pi * n2_Si / (pump_nm * 1e-9 * A_eff_um2 * 1e-12)
+# Two DIFFERENT quantities, as the assignment says:
+#  (a) FWM conversion efficiency (stimulated): eta = P_i/P_s = (gamma P L)^2 sinc^2(Dk L/2)
+#      [REF: AGRAWAL13 sec 10.2]. Dimensionless, ~ P^2.
+#  (b) SPONTANEOUS pair rate: SFWM is FWM seeded by VACUUM fluctuations, i.e. an
+#      effective seed of ~ h*nu per mode within the collection bandwidth dnu.
+#      Hence   R_pair = (gamma P L)^2 sinc^2(Dk L/2) * dnu      [pairs/s, ~ P^2]
+#      This is exactly the structure of SAVANIER16 Eq. (1), r = dnu [gamma P L]^2 sinc^2,
+#      and of the measured scaling PGR ~ P^2 (SAVANIER16 Fig. 6; ARXIV2411 Eq. S1).
+#  BUG FIXED: an earlier version multiplied eta by the PUMP photon flux P/(hbar w),
+#      giving R ~ P^3 and overestimating by ~1e5-1e6 (P/hbar*w ~ 1e16 Hz vs dnu ~ 1e11 Hz).
+dnu_collect = 100e9      # Hz, collection bandwidth per photon (~0.8 nm DWDM filter) [ASSUMPTION]
 print("\n" + "=" * 78)
-print("[T4-2] FWM efficiency / pair rate, straight waveguide (order of magnitude)")
+print("[T4-2] FWM conversion efficiency AND spontaneous pair rate, straight waveguide")
 print("=" * 78)
-print(f"gamma = {gamma_nl:.1f} /(W m)")
+print(f"gamma = {gamma_nl:.1f} /(W m);  collection bandwidth dnu = {dnu_collect*1e-9:.0f} GHz")
 for L_mm in (0.5, 1.0, 2.0):
     P_in = 1e-3
-    eta = (gamma_nl * P_in * L_mm * 1e-3) ** 2 * sinc2(delta_k_per_m[i_fsr] * L_mm * 1e-3 / 2)
-    R = eta * P_in / (hbar * omega_p)
-    print(f"  L = {L_mm:.1f} mm, P = 1 mW : eta_FWM = {eta:.2e}, R_pair ~ {R:.2e} pairs/s")
+    pm = sinc2(delta_k_per_m[i_fsr] * L_mm * 1e-3 / 2)
+    eta = (gamma_nl * P_in * L_mm * 1e-3) ** 2 * pm
+    R = eta * dnu_collect
+    print(f"  L = {L_mm:.1f} mm, P = 1 mW : eta_FWM = {eta:.2e} (stimulated)   "
+          f"R_pair = eta*dnu = {R:.2e} pairs/s (spontaneous)")
+print("  scaling check: doubling P -> eta x4 and R_pair x4 (P^2), as measured in SAVANIER16 Fig. 6.")
 
 
 # =============================================================================
@@ -244,24 +300,45 @@ B_of = lambda A: A * np.log(10) / 20.0
 alpha_of = lambda A, L_m: np.exp(-B_of(A) * L_m * 100)
 
 
+def ring_resonance(L, m, guess_nm, n_eff_func, n_g_func):
+    """Exact order-m resonance of a dispersive index: n_eff(lambda)*L/lambda = m.
+    Root-finding, never the first-order guess (pump -/+ FSR), which misses by
+    ~50 pm > linewidth. The bracket uses n_g [REF: RABUS07 Eq. 2.21]."""
+    f = lambda l: n_eff_func(l) * L / (l * 1e-9) - m
+    fsr = guess_nm ** 2 / (n_g_func(guess_nm) * L * 1e9)
+    return brentq(f, guess_nm - 0.6 * fsr, guess_nm + 0.6 * fsr)
+
+
 def size_rings(r1_um):
-    """L1 exactly resonant at the pump, odd order; L2 = L1/2 (Vernier N:M = 2:1)
-    [REF: RABUS07 Eq. 2.71 for the resonance condition, Eqs. 2.77-2.78 for the
-    Vernier relation; the 2:1 choice is our reading of the supervisor's comb
-    slide (synchronous lines at s, s, _, i, i) -- ASSUMPTION to be confirmed]."""
-    m1 = round(n_eff(pump_nm) * 2 * np.pi * r1_um * 1e-6 / (pump_nm * 1e-9))
+    """L1 exactly resonant at the pump (odd order) using the BENT-mode index of
+    ring 1, and L2 sized so that ring 2 is resonant at the same wavelengths.
+
+    [REF: RABUS07 Eq. 2.71] resonance: m*lambda_m = L*n_eff, with n_eff the index
+    of the RING mode (text after Eq. 2.3) -> use n_eff_R1, n_eff_R2, not the
+    straight-guide index.
+
+    Setting L2 = L1/2 naively is WRONG: the curvature correction goes as ~1/R^2
+    and R2 = R1/2, so n_2 > n_1 by ~4e-3 and ring 2 lands ~1.4 nm (tens of
+    linewidths) off the signal. Even rescaling by n_1/n_2 at the PUMP leaves
+    ~0.5 nm = 10 linewidths, because the two bent modes disperse differently.
+    L2 is therefore anchored on the SIGNAL resonance (see body). [The 2:1 ratio
+    itself remains our reading of the supervisor's comb slide -- ASSUMPTION.]"""
+    m1 = round(n_eff_R1(pump_nm) * 2 * np.pi * r1_um * 1e-6 / (pump_nm * 1e-9))
     if m1 % 2 == 0:
         m1 += 1
-    L1 = m1 * pump_nm * 1e-9 / n_eff(pump_nm)
-    return L1, L1 / 2, m1
+    L1 = m1 * pump_nm * 1e-9 / n_eff_R1(pump_nm)
 
-
-def resonance(L, m, guess_nm):
-    """Exact order-m resonance of the dispersive n_eff(lambda) (root finding).
-    A first-order guess (pump -/+ FSR) misses by ~50 pm > linewidth -- never use it."""
-    f = lambda l: n_eff(l) * L / (l * 1e-9) - m
-    fsr = guess_nm ** 2 / (n_g(guess_nm) * L * 1e9)
-    return brentq(f, guess_nm - 0.6 * fsr, guess_nm + 0.6 * fsr)
+    # Ring 2: fix L2 by requiring EXACT resonance at the SIGNAL, on the integer
+    # order m2 = (m1+1)/2 -- impose the 2:1 parity where the drop must open.
+    # Scaling L2 by the index ratio taken AT THE PUMP is NOT enough: n_2 and n_1
+    # disperse differently (different radii), leaving ~0.5 nm = 10 linewidths of
+    # residual detuning at the signal (verified). Anchoring on the signal puts the
+    # drop band exactly on the pair wavelength and, by parity (m1 odd), still
+    # leaves the pump on an anti-resonance of ring 2.
+    FSR1 = pump_nm ** 2 / (n_g_R1(pump_nm) * L1 * 1e9)
+    lam_s_tmp = ring_resonance(L1, m1 + 1, pump_nm - FSR1, n_eff_R1, n_g_R1)
+    L2 = ((m1 + 1) // 2) * lam_s_tmp * 1e-9 / n_eff_R2(lam_s_tmp)
+    return L1, L2, m1
 
 
 def Q_factors(L_m, A, K1):
@@ -304,8 +381,8 @@ print("[T4-3] Ring resonator: Q, build-up, PGR (Eq. S1 of ARXIV2411, calibrated)
 print("=" * 78)
 L1, L2, m1 = size_rings(typ["r1_um"])
 FSR1_nm = pump_nm ** 2 / (n_g(pump_nm) * L1 * 1e9)
-lam_s = resonance(L1, m1 + 1, pump_nm - FSR1_nm)
-lam_i = resonance(L1, m1 - 1, pump_nm + FSR1_nm)
+lam_s = ring_resonance(L1, m1 + 1, pump_nm - FSR1_nm, n_eff_R1, n_g_R1)
+lam_i = ring_resonance(L1, m1 - 1, pump_nm + FSR1_nm, n_eff_R1, n_g_R1)
 nu = lambda l_nm: c / (l_nm * 1e-9)
 dnuFSR = abs((nu(lam_s) - nu(pump_nm)) - (nu(pump_nm) - nu(lam_i)))   # dispersion mismatch, Hz
 Q_o, Q_e = Q_factors(L1, typ["A_dB_per_cm"], typ["K1_percent"] / 100)
@@ -359,13 +436,16 @@ def couplers(K1):
     return k1, t1, k2, np.sqrt(1 - k2 ** 2), k3, t3
 
 
-theta = lambda l_nm, L: 2 * np.pi * n_eff(l_nm) * L / (l_nm * 1e-9)   # [RABUS07 Eq. 2.5]
+# [RABUS07 Eq. 2.5] theta = 2 pi n_eff L / lambda, with n_eff of the ring mode:
+# ring 1 and ring 2 have DIFFERENT bent-mode indices (different radii).
+theta1 = lambda l_nm, L: 2 * np.pi * n_eff_R1(l_nm) * L / (l_nm * 1e-9)
+theta2 = lambda l_nm, L: 2 * np.pi * n_eff_R2(l_nm) * L / (l_nm * 1e-9)
 
 
 def series_rings(l_nm, L1, L2, K1, A, dn2=0.0):
     k1, t1, k2, t2, k3, t3 = couplers(K1)
-    a1 = np.sqrt(alpha_of(A, L1)) * np.exp(1j * theta(l_nm, L1) / 2)
-    th2 = 2 * np.pi * (n_eff(l_nm) + dn2) * L2 / (l_nm * 1e-9)
+    a1 = np.sqrt(alpha_of(A, L1)) * np.exp(1j * theta1(l_nm, L1) / 2)
+    th2 = 2 * np.pi * (n_eff_R2(l_nm) + dn2) * L2 / (l_nm * 1e-9)
     a2 = np.sqrt(alpha_of(A, L2)) * np.exp(1j * th2 / 2)
     M = np.array([[1 - t1 * t2 * a1 ** 2, t1 * a1 * k2 * a2],
                   [-t3 * a2 * k2 * a1, 1 - t3 * t2 * a2 ** 2]])
@@ -380,8 +460,8 @@ def series_rings(l_nm, L1, L2, K1, A, dn2=0.0):
 def kpis(r1_um, A, K1_pct, dn2=0.0):
     L1, L2, m1 = size_rings(r1_um)
     FSR = pump_nm ** 2 / (n_g(pump_nm) * L1 * 1e9)
-    ls = resonance(L1, m1 + 1, pump_nm - FSR)
-    li = resonance(L1, m1 - 1, pump_nm + FSR)
+    ls = ring_resonance(L1, m1 + 1, pump_nm - FSR, n_eff_R1, n_g_R1)
+    li = ring_resonance(L1, m1 - 1, pump_nm + FSR, n_eff_R1, n_g_R1)
     K1 = K1_pct / 100
     Tp = abs(series_rings(pump_nm, L1, L2, K1, A, dn2)[1]) ** 2      # pump leaking to DROP
     Ts = abs(series_rings(ls, L1, L2, K1, A, dn2)[1]) ** 2
@@ -402,6 +482,26 @@ K = kpis(typ["r1_um"], typ["A_dB_per_cm"], typ["K1_percent"])
 print(f"T_drop(pump) = {K['Tp']:.2e}  ->  pump rejection at the drop port = {K['rej_dB']:.1f} dB")
 print(f"T_drop(signal) = {K['Ts']:.3f}, T_drop(idler) = {K['Ti']:.3f}, pump build-up = x{K['buildup']:.0f}")
 print(f"Extinction ratio drop(s)/drop(p) = {K['ER_dB']:.1f} dB")
+
+# --- parity check with the BENT indices: does theta_2 = theta_1/2 still hold? ---
+print("\nParity check with bent-mode indices (fractional part of theta_2/2pi;")
+print("0 or 1 = ring 2 resonant, 0.5 = anti-resonant):")
+# criterion in LINEWIDTHS, not in fraction of 2pi: a residue of 0.027*2pi looks
+# small but is ~494 pm = 10 linewidths at Q ~ 3e4, i.e. fully off resonance.
+_fwhm_pm = pump_nm / Q_tot * 1e3
+_dth_dlam = 2 * np.pi * n_g(pump_nm) * K["L2"] / (pump_nm * 1e-9) ** 2      # rad/m
+for nm_, l_ in (("pump", pump_nm), ("signal", K["ls"]), ("idler", K["li"])):
+    frac = (theta2(l_, K["L2"]) / (2 * np.pi)) % 1.0
+    res = min(frac, 1 - frac)
+    det_pm = res * 2 * np.pi / _dth_dlam * 1e12
+    n_lw = det_pm / _fwhm_pm
+    st = "RESONANT" if n_lw < 0.5 else ("ANTI-RESONANT" if abs(frac - .5) < .02 else f"OFF by {n_lw:.1f} linewidths")
+    print(f"  {nm_:6s} ({l_:8.3f} nm): theta2/2pi frac = {frac:.4f}  "
+          f"({det_pm:6.0f} pm = {n_lw:5.1f} lw)  -> {st}")
+print(f"  (resonance FWHM = {_fwhm_pm:.0f} pm)")
+print(f"R1 = {K['L1']/2/np.pi*1e6:.4f} um, R2 = {K['L2']/2/np.pi*1e6:.4f} um "
+      f"(naive L1/2 would give {K['L1']/2/2/np.pi*1e6:.4f} um: "
+      f"{(K['L2']-K['L1']/2)/2/np.pi*1e9:+.1f} nm correction)")
 print("Benchmarks: single Vernier stage measured ~60 dB at sub-filter FSRs, > 100 dB at")
 print("  one source FSR with cascaded 4th/6th-order filters, < 1 dB IL [REF: ARXIV2411 Ext.Fig.6];")
 print("  cascaded 2nd-order CROW > 110 dB [REF: KUMAR20]; 10x Bragg 45 -> 60 dB [REF: MICHON22].")
@@ -416,6 +516,90 @@ print("  -> the target is reached by cascading, as in every cited demonstration;
 print("     stage forced to 100 dB by shrinking K1 would lose the pairs (loss-limited).")
 
 
+
+
+# =============================================================================
+# [T4-4c] THE SUPERVISOR'S OWN QUANTITIES: g's, eta, U_max, FSR_ext
+# =============================================================================
+# The KPI slide asks for  g_i1, g_12, g_2d | k_i1, k_12, k_2d | t_i1, t_12, t_2d
+# and the Vernier slide for  U_max = P/gamma_i ,
+# eta = gamma_aux/(gamma_aux + gamma_1 + gamma_i) -> 1 for gamma_aux >> gamma_i ,
+# FSR_ext = m1 FSR1 = m2 FSR2 with m1, m2 co-prime.
+# The k's and t's are in [T4-4]/[T4-4b]; the g's (= decay RATES) are built here.
+#
+# Convention: U_max = P/gamma_i requires gamma to be an ENERGY decay rate, so
+#   gamma = omega/Q   [steady state: dU/dt = P - gamma U = 0 -> U = P/gamma]
+# For a coupler of power coupling K on a ring of round-trip time T_rt = n_g L/c:
+#   gamma = K / T_rt        (check: Q = omega/gamma = 2 pi n_g L/(lambda K),
+#                            identical to SAVANIER16 Eq. 5)
+# For the intrinsic loss:  gamma_i = alpha_power * v_g = alpha_power * c/n_g
+#                          (check: Q_o = 2 pi n_g/(lambda alpha), SAVANIER16 Eq. 4)
+# The inter-ring term g_12 is a COUPLING rate, not a decay rate:
+#   g_12 = kappa_12 / sqrt(T_rt1 T_rt2)   [LITTLE97 temporal CMT]
+
+print("\n" + "=" * 78)
+print("[T4-4c] Decay rates, extraction efficiency, stored energy, extended FSR")
+print("=" * 78)
+_k1, _t1, _k2, _t2, _k3, _t3 = couplers(typ["K1_percent"] / 100)
+T_rt1 = n_g_R1(pump_nm) * K["L1"] / c
+T_rt2 = n_g_R1(pump_nm) * K["L2"] / c
+alpha_pow = 2 * B_of(typ["A_dB_per_cm"]) * 100          # power attenuation, 1/m
+g_i1 = _k1 ** 2 / T_rt1        # input bus <-> R1   (slide: gamma_1)
+g_12 = _k2 / np.sqrt(T_rt1 * T_rt2)   # R1 <-> R2   (coupling rate)
+g_2d = _k3 ** 2 / T_rt2        # R2 <-> drop bus    (slide: gamma_aux)
+g_i = alpha_pow * c / n_g_R1(pump_nm)                   # intrinsic (slide: gamma_i)
+
+print(f"round-trip times: T_rt1 = {T_rt1*1e12:.3f} ps, T_rt2 = {T_rt2*1e12:.3f} ps")
+print(f"{'':14}{'k (field)':>11}{'t':>10}{'g = rate (1/s)':>18}{'Q = omega/g':>14}")
+for nm_, kk, tt, gg in (("i1 (in<->R1)", _k1, _t1, g_i1), ("12 (R1<->R2)", _k2, _t2, g_12),
+                        ("2d (R2<->drop)", _k3, _t3, g_2d)):
+    print(f"  {nm_:13s}{kk:11.4f}{tt:10.5f}{gg:18.3e}{omega_p/gg:14.2e}")
+print(f"  {'i (loss)':13s}{'-':>11}{'-':>10}{g_i:18.3e}{omega_p/g_i:14.2e}")
+
+# --- eta: extraction efficiency, exactly as written on the slide ---
+eta_slide = g_2d / (g_2d + g_i1 + g_i)
+eta_pairs = g_12 / (g_12 + g_i1 + g_i)
+print(f"\neta = g_2d/(g_2d + g_i1 + g_i) = {eta_slide:.3f}   [slide's formula, literally]")
+print(f"  g_aux/g_i = {g_2d/g_i:.1f} (>> 1, the slide's stated condition IS met) but")
+print(f"  g_aux/g_1 = {g_2d/g_i1:.2f}: the Butterworth rule sets the two EXTERNAL rates equal,")
+print(f"  which pins eta at ~1/2. The binding constraint is g_aux vs g_1, not g_aux vs g_i.")
+print(f"\neta for pairs BORN IN R1 (must cross R1->R2->drop, bottleneck g_12):")
+print(f"  eta_pairs = g_12/(g_12 + g_i1 + g_i) = {eta_pairs:.3f}")
+print(f"  NOTE: this is NOT T_drop(signal) = {K['Ts']:.3f}. Both are correct and different:")
+print(f"    T_drop  = transmission of light INJECTED from outside (input -> drop); -> 1 at")
+print(f"              matched coupling [RABUS07, text after Eq. 2.13: 'fully extracted'].")
+print(f"    eta     = fraction of energy ALREADY INSIDE the cavity that leaves via the drop;")
+print(f"              -> 1/2 at matched coupling. SFWM pairs are born inside, so ETA is the")
+print(f"              figure of merit for the pairs, and T_drop is the one for the pump.")
+print(f"  (ARXIV2411 Eq. S1 contains exactly this escape efficiency as r_e/r_tot per photon.)")
+print(f"\nDESIGN TENSION: a maximally-flat filter wants g_aux ~ g_1 and a weak g_12")
+print(f"  (kappa_12 = kappa_1^2/(2 sqrt2)); efficient collection wants g_12 >> g_1. Here")
+print(f"  g_12/g_i1 = {g_12/g_i1:.2f}. Flat passband and high eta pull the couplings in opposite")
+print(f"  directions -- a decision to take, not a free optimum.")
+
+# --- U_max = P/gamma_i ---
+print(f"\nStored energy at resonance (pump):")
+print(f"{'P_in':>9}{'U_max = P/g_i':>16}{'U = P/g_total':>16}{'photons in cavity':>20}")
+for P_mW in (0.1, 1.0):
+    P_w = P_mW * 1e-3          # NB: not 'P' -- that name holds the parameter table
+    U_max = P_w / g_i
+    U_tot = P_w / (g_i1 + g_2d + g_i)
+    print(f"{P_mW:7.1f} mW{U_max*1e15:14.2f} fJ{U_tot*1e15:14.2f} fJ{U_tot/(hbar*omega_p):20.0f}")
+print("  U_max = P/g_i is the loss-limited ceiling (slide); the real stored energy is")
+print("  P/g_total, ~40x smaller here because the coupling rates dominate the loss rate.")
+
+# --- FSR_ext = m1 FSR1 = m2 FSR2 ---
+FSR1_c = pump_nm ** 2 / (n_g_R1(pump_nm) * K["L1"] * 1e9)
+FSR2_c = pump_nm ** 2 / (n_g_R1(pump_nm) * K["L2"] * 1e9)
+m1_v, m2_v = 2, 1                                    # our 2:1 Vernier, co-prime
+print(f"\nFSR_ext = m1 FSR1 = m2 FSR2, (m1,m2) = ({m1_v},{m2_v}) co-prime "
+      f"[RABUS07 Eqs. 2.77-2.78; GRIFFEL00]:")
+print(f"  FSR1 = {FSR1_c:.3f} nm, FSR2 = {FSR2_c:.3f} nm")
+print(f"  m1*FSR1 = {m1_v*FSR1_c:.3f} nm   m2*FSR2 = {m2_v*FSR2_c:.3f} nm   "
+      f"(agree to {abs(m1_v*FSR1_c-m2_v*FSR2_c)/FSR1_c*100:.1f} % of FSR1)")
+print(f"  -> FSR_ext = {m1_v*FSR1_c:.2f} nm: the pump repeats only every {m1_v} orders of R1,")
+print(f"     which is what keeps it off ring 2. The residual mismatch is the dispersion")
+print(f"     difference between the two bent modes (n_g,R1 used for both here).")
 
 
 # =============================================================================
@@ -479,6 +663,30 @@ kappa_0 = np.exp(ln_k0)                                                       # 
 print(f"supermode kappa_z(g): " + ", ".join(f"{g:.0f} nm -> {k:.4f} rad/um" for g, k in zip(gaps_nm, kz)))
 print(f"fit kappa_z = {kappa_0:.3f} exp(-g/{1e3/gamma_g:.0f} nm)   (decay length {1e3/gamma_g:.0f} nm)")
 
+# --- VALIDATION against CHROST15 (same 500x220 nm strip, independent solver) ---
+# Textbook method is identical: C = pi*dn/lambda, L_x = lambda/(2 dn) = pi/(2 C) [Eqs. 4.3, 4.5].
+Lx_200 = np.pi / (2 * kz[list(gaps_nm).index(200)])
+print(f"VALIDATION [CHROST15 Fig. 4.14b]: cross-over length L_x(gap 200 nm, 1550 nm) = {Lx_200:.1f} um "
+      f"vs ~37.5 um in the textbook (Lumerical MODE)  -> {abs(Lx_200-37.5)/37.5*100:.0f} % difference")
+print(f"VALIDATION [CHROST15 Fig. 4.14a]: L_x vs gap is exponential; textbook slope ~ 1 decade per "
+      f"~240 nm -> decay length ~103 nm vs our {1e3/gamma_g:.0f} nm")
+print("NOTE [CHROST15 sec 4.1.5]: eigenmode L_x underestimates measured L_x by 5-8 % (fabricated")
+print("  thickness/width/sidewall angle) -> our kappa is likely ~5-15 % too strong; and 'directional")
+print("  couplers are very sensitive to fabrication variations ... vary from wafer to wafer'.")
+
+# --- wavelength dependence of kappa (09/09 minutes: 'kappa depends on frequency') ---
+# CHROST15 Fig. 4.14b: L_x 46 -> 31.5 um over 1.50-1.60 um for this coupler.
+# Here: supermodes at the actual signal / pump / idler wavelengths of the design.
+kz_s, _, _ = kappa_z_of_gap(200, lam_s * 1e-3)
+kz_i, _, _ = kappa_z_of_gap(200, lam_i * 1e-3)
+kz_p = kz[list(gaps_nm).index(200)]
+print(f"kappa_z(gap 200 nm) at signal / pump / idler = {kz_s:.4f} / {kz_p:.4f} / {kz_i:.4f} rad/um "
+      f"-> {(kz_s/kz_p-1)*100:+.1f} % / 0 / {(kz_i/kz_p-1)*100:+.1f} %")
+print("  -> kappa is frequency dependent (CHROST15 Fig. 4.14b: -0.45 %/nm), but over one FSR the")
+print("     change is a few %, so the Butterworth relations k2 = k1^2/(2 sqrt2), k3 = k1/sqrt2 set at the")
+print("     pump hold within that tolerance at s and i -- consistent with treating kappa as")
+print("     frequency-independent to first order, as agreed in the 09/09 minutes.")
+
 
 def K_power(gap_nm, R_eff_um):
     """Power coupling |kappa|^2 of a curved coupler with effective radius R_eff
@@ -493,6 +701,10 @@ R_bus1, R_12, R_bus2 = R1_um, R1_um * R2_um / (R1_um + R2_um), R2_um
 print(f"effective radii [RABUS07 Eq. 2.70]: bus-R1 {R_bus1:.2f} um, R1-R2 {R_12:.2f} um, R2-bus {R_bus2:.2f} um")
 print(f"effective interaction lengths sqrt(2 pi R/gamma): "
       f"{K_power(200, R_bus1)[1]:.2f} / {K_power(200, R_12)[1]:.2f} / {K_power(200, R_bus2)[1]:.2f} um")
+print(f"  cf. CHROST15 Eq. 4.13: the bends of a fabricated coupler add an effective length z_bend = 2.3-2.8 um")
+print(f"  (measured) / 2.8 um (3D FDTD); our curved-path integral gives {K_power(200, R_bus1)[1]:.2f} um for a")
+print(f"  R = {R_bus1:.0f} um ring tangent to a straight bus -- the same order, from an analytic integral of")
+print(f"  the exponential gap law (RABUS07 Eq. 2.66 structure) instead of FDTD.")
 
 # --- gap needed to realise the design couplings of [T4-4] ---
 k1d, _, k2d, _, k3d, _ = couplers(typ["K1_percent"] / 100)
