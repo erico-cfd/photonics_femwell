@@ -1,0 +1,140 @@
+(femwell) (base) rico@Jarvis:/mnt/c/Users/Erico/Desktop/photonic$ python dvd.py
+==============================================================================
+0. PARAMETER TABLE (min, typical, max) -- sources in the code comments
+==============================================================================
+  width_nm      : [    370 ,     400 ,     410]
+  height_nm     : [    220 ,     220 ,     220]
+  r1_um         : [      5 ,      10 ,      20]
+  A_dB_per_cm   : [    0.3 ,     0.5 ,       3]
+  K1_percent    : [    0.5 ,       3 ,      20]
+  pump_nm       : [   1580 ,    1580 ,    1580]
+
+==============================================================================
+[T4-1] Straight waveguide: Femwell sweep (n_eff, n_g, GVD, A_eff)
+==============================================================================
+n_eff(1580) = 2.18711   n_g = 4.5318   A_eff = 0.183 um^2
+beta2 = -1.064e-22 s^2/m   D = +80255 ps/(nm km) (ANOMALOUS dispersion)
+  -> anomalous GVD (D>0, beta2<0) is favourable for SFWM [AGRAWAL13 sec 10.2].
+  [Friday: aim for D slightly positive / dispersion close to zero -> sweep width.]
+  straight guide, L = 63 um      : sinc^2 = 0.9973
+  RING, L_res = L*F/pi = 3.55 mm (57 round trips): sinc^2 = 0.0336
+  -> first sinc null at 0.6 THz (~8 FSR).
+
+==============================================================================
+[T4-2] FWM efficiency / pair rate, straight waveguide (order of magnitude)
+==============================================================================
+gamma = 97.7 /(W m)
+  L = 0.5 mm, P = 1 mW : eta_FWM = 2.01e-09, R_pair ~ 1.60e+07 pairs/s
+  L = 1.0 mm, P = 1 mW : eta_FWM = 4.57e-09, R_pair ~ 3.64e+07 pairs/s
+  L = 2.0 mm, P = 1 mW : eta_FWM = 3.55e-10, R_pair ~ 2.83e+06 pairs/s
+
+==============================================================================
+[T4-3] Ring resonator: Q, build-up, PGR (Eq. S1 of ARXIV2411, calibrated)
+==============================================================================
+R1 = 10.003 um (m1 = 87), FSR1 = 8.765 nm; signal 1571.108 / idler 1588.750 nm
+FSR mismatch from dispersion, dnu_FSR = 28.96 GHz
+Q_o = 1.565e+06  Q_e = 3.776e+04  Q_tot = 3.687e+04
+  VALIDATION [SAVANIER16]: alpha = 0.74 dB/cm -> Q_U ours 9.80e+05 vs measured 9.2e+05 (+7 %)
+  VALIDATION [SAVANIER16]: alpha = 1.23 dB/cm -> Q_U ours 5.90e+05 vs measured 5.6e+05 (+5 %)
+Optimal coupling for max PGR: Q_e/Q_o = 3/4 [ARXIV2411 Eq. S2]; here Q_e/Q_o = 0.02
+PGR (Eq. S1, calibrated) = 3.06 MHz/mW^2
+  [assumption] (R_ref/R)^2 scaling; [not modelled] TPA/free carriers.
+
+==============================================================================
+[T4-4] Vernier double ring -- typical design point (A = 0.50 dB/cm)
+==============================================================================
+Six coupling coefficients (Butterworth rule):
+  (t1,k1) = (0.9849,0.1732)  (t2,k2) = (0.99994,0.0106)  (t3,k3) = (0.9925,0.1225)
+T_drop(pump) = 5.33e-05  ->  pump rejection at the drop port = 42.7 dB
+T_drop(signal) = 0.953, T_drop(idler) = 0.953, pump build-up = x125
+Extinction ratio drop(s)/drop(p) = 42.5 dB
+Benchmarks: single Vernier stage ~60 dB, > 100 dB cascaded [ARXIV2411]; CROW > 110 dB [KUMAR20]; Bragg 10x 45->60 dB [MICHON22].
+
+Route to 100-120 dB:
+  1 identical stage(s): rejection = 43 dB, pairs kept = 0.953 (0.2 dB)
+  2 identical stage(s): rejection = 85 dB, pairs kept = 0.908 (0.4 dB)
+  3 identical stage(s): rejection = 128 dB, pairs kept = 0.865 (0.6 dB)
+
+==============================================================================
+[T4-4b] kappa from the real gap: Femwell supermodes + Eq. 4.8 (Chrostowski)
+==============================================================================
+supermode kappa_z(g): 150 nm -> 0.1849 rad/um, 200 nm -> 0.1266 rad/um, 250 nm -> 0.0876 rad/um, 300 nm -> 0.0608 rad/um, 350 nm -> 0.0424 rad/um
+fit kappa_z = 0.553 exp(-g/136 nm)   (decay length 136 nm)
+coupling length (Eq. 4.8, design choice): L = 5.00 um (same for the 3 couplers)
+
+Gap that realises each design coupling (Eq. 4.8, L fixed):
+  bus <-> R1: |kappa|^2 = 0.0300  ->  gap = 376 nm  (L = 5.0 um)
+  R1 <-> R2: |kappa|^2 = 0.0001  ->  gap = 757 nm  (L = 5.0 um)
+  R2 <-> bus: |kappa|^2 = 0.0150  ->  gap = 424 nm  (L = 5.0 um)
+
+Validation against measured/reported devices (order of magnitude):
+  SAVANIER16: gap 200 nm, rib 650x220/70 nm -> |kappa|^2 = 0.018 (inferred from Q_L).
+     our Eq-4.8 strip model (gap 200 nm, L = 5.0 um) gives 0.353 (different cross-section + straight-vs-circular: same order).
+  ARXIV2411: gap 290 nm, R = 19.2 um -> our |kappa|^2 = 0.1038, Q_e = 2.1e+04 (measured ~6.8e+04)
+  ARXIV2411: gap 435 nm, R = 19.45 um -> our |kappa|^2 = 0.0127, Q_e = 1.7e+05 (measured ~7.1e+04)
+     -> off by design: different cross-section AND circular vs straight coupler.
+
+Gap sensitivity: d ln|kappa|^2 / d gap = -1.5 % per nm.
+  +/-5 nm of gap -> K1 x 0.93 / 1.08
+  +/-10 nm of gap -> K1 x 0.86 / 1.16
+
+==============================================================================
+[T4-opt] Constrained optimization: fixed FSR, optimize K1 (-> gap)
+==============================================================================
+FSR target = 100 GHz -> R1 = 105.3 um (R2 = 52.6 um), A_total = 0.500 dB/cm
+fabricable gap [100, 600] nm -> K1 in [0.113, 94.152] %
+objective: maximise T_drop(signal) subject to rejection >= 40 dB
+
+OPTIMUM: K1 = 4.516 %  ->  bus gap = 348 nm   (limited by: rejection spec)
+  R1 = 105.3 um, R2 = 52.6 um  (FSR = 100 GHz)
+  pump rejection = 40.3 dB,  T_drop(signal) = 0.714 (1.46 dB IL),  ER = 38.9 dB
+  derived couplings: K2 = 0.0255 %, K3 = 2.258 %
+  cascade: 1x = 40 dB, 2x = 81 dB, 3x = 121 dB
+Figure: task4_optimization.png
+
+==============================================================================
+[T4-5] Fabrication variability
+==============================================================================
+dn_eff/dw = 3.04e-03 /nm  ->  1061 pm of resonance shift per nm of width
+THOMSON16 +/-5 nm width  -> +/-5.30 nm (common-mode: both combs move together)
+ARXIV2411 measured die-to-die sigma_lambda = 1.73 nm, worst 4.8 nm  (same order: consistent)
+Resonance FWHM = 43 pm (Q_tot = 3.69e+04).
+Differential width error keeping >= 50 % of the extraction: |dw| < 0.03 nm (= 32 pm of relative detuning, ~ one linewidth)
+  -> a 2-ring Vernier needs per-ring trimming to ~0.1 nm-equivalent [ARXIV2411; MEDINA24].
+
+Figure: task4_results.png
+
+==============================================================================
+[T4-6] Critical discussion -- what is certain, what is assumed, what is missing
+==============================================================================
+
+CERTAIN (from cited sources or algebra):
+ - Resonance/FSR/Q relations (RABUS07, BOG12); series-ring transfer function
+   (RABUS07 Eqs. 2.58-2.65), energy conservation checked numerically.
+ - Vernier relation FSR_ext = N FSR1 = M FSR2 (RABUS07 2.77-2.78; GRIFFEL00).
+ - L2 = L1/2 makes theta2 = theta1/2 identically: R2 anti-resonant at every odd
+   order of R1 (pump), resonant at every even order (signal, idler) -- pure algebra.
+ - PGR functional form (ARXIV2411 Eq. S1 / GENTRY18) and its calibration point.
+ - Measured variability (ARXIV2411 Table 1) and measured filter performance.
+
+ASSUMED (ours):
+ - 2:1 Vernier ratio (read from the supervisor's comb slide).
+ - Lossless, frequency-independent couplers; Butterworth k2, k3 rule.
+ - kappa from the gap via CHROST15 Eq. 4.8 (straight coupler, L = 5 um); TE0 only.
+ - Same cross-section for the PGR calibration transfer ((R_ref/R)^2 scaling).
+ - Linear phase-matching term only; CW undepleted pump.
+
+NOT CAPTURED (and known to matter):
+ - IS IT NORMAL TO SEE NO PUMP AT THE DROP? The linear TMM gives only RELATIVE
+   rejection (~tens of dB). The pump is ~1e9x stronger than the pairs, so even
+   after this rejection RESIDUAL PUMP STILL DOMINATES -> physically pump photons
+   remain. "T_drop ~ 0" is an idealisation. A realistic answer needs the ABSOLUTE
+   power budget (1e9) + CASCADING to >100 dB + the scattered-light floor.
+ - TPA / free-carrier absorption -> PGR is an upper bound (ARXIV2411; MEDINA24).
+ - Scattered-light floor: AFIFI21 measured 60 dB vs 157 dB modelled -> model
+   rejection is an upper bound.
+ - Backscattering / resonance splitting from sidewall roughness (RABUS07 §2.1.1).
+ - kappa uses Eq. 4.8 (straight coupler); circular-ring curved coupler + 3D FDTD
+   are the next refinement.
+ - lambda_p is an INPUT: the model predicts the response around it, it does not
+   select it (supervisor's note).
