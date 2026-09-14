@@ -1373,6 +1373,34 @@ print(f"  within a fraction of the loaded linewidth or be actively corrected.")
 # Plot ONLY inside the physically simulated FEMWELL wavelength interval.
 # UnivariateSpline(ext=2) intentionally forbids extrapolation, so every
 # diagnostic/figure must respect the same domain as the phase-matching model.
+#
+# IMPORTANT PLOTTING CHOICE:
+#   the transmission/loss figures below are generated with the OPTIMIZED
+#   two-ring design, not with the nominal Butterworth point.
+#   We use the joint radius + K1/K2/K3 design that maximizes single-device
+#   pump rejection within the investigated physical domain.
+plot_design = best_joint_rejection
+plot_geom = best_joint_rejection
+plot_FSR_nm = plot_geom["FSR_nm"]
+plot_lam_s = plot_geom["ls"]
+plot_lam_i = plot_geom["li"]
+plot_K1 = plot_design["K1"]
+plot_K2 = plot_design["K2"]
+plot_K3 = plot_design["K3"]
+plot_A = typ["A_dB_per_cm"]
+plot_KP = dict(Tp=plot_design["Tp"], Ts=plot_design["Ts"], Ti=plot_design["Ti"], rej=plot_design["rej"])
+plot_Qo, plot_Qe = Q_factors(plot_geom["L1"], plot_A, plot_K1)
+plot_QL = 1.0 / (1.0/plot_Qo + 1.0/plot_Qe)
+plot_F_ring = plot_FSR_nm / (pump_nm / plot_QL)
+plot_i_fsr = np.argmin(np.abs(pump_nm - ls_nm - plot_FSR_nm))
+
+print("\n[PLOT] Figures lean_fig2_T4-4 and lean_fig3_sweeps use the optimized")
+print("       two-ring design (joint radius + K1/K2/K3 max-rejection point):")
+print(f"       target/actual FSR = {plot_geom['fsr_target_GHz']:.2f} / {plot_geom['fsr_GHz']:.3f} GHz")
+print(f"       R1 = {plot_geom['R1_um']:.3f} um, R2 = {plot_geom['R2_um']:.3f} um")
+print(f"       K1 = {100*plot_K1:.6f} %, K2 = {100*plot_K2:.6f} %, K3 = {100*plot_K3:.6f} %")
+print(f"       Tp = {plot_KP['Tp']:.3e}, Ts = {plot_KP['Ts']:.5f}, Ti = {plot_KP['Ti']:.5f}, rejection = {plot_KP['rej']:.2f} dB")
+
 lf = np.linspace(wl.min(), wl.max(), 200)
 
 f1, a = plt.subplots(1, 3, figsize=(15, 4.2))
@@ -1396,76 +1424,134 @@ a[1].set_title(
     f"(b) GVD @ pump = {D_ps(pump_nm):+.0f} ps/(nm km), {_dispersion_label}"
 )
 a[2].plot(dOm / (2 * np.pi) * 1e-12, sinc2(dk * 1e-3 / 2), label="L = 1 mm straight")
-a[2].plot(dOm / (2 * np.pi) * 1e-12, sinc2(dk * L1 * F_ring / np.pi / 2),
-          label=r"ring, $L\mathcal{F}/\pi$ [SAVANIER16]")
-a[2].axvline(dOm[i_fsr] / (2 * np.pi) * 1e-12, color="r", ls=":", label="1 FSR")
+a[2].plot(dOm / (2 * np.pi) * 1e-12, sinc2(dk * plot_geom['L1'] * plot_F_ring / np.pi / 2),
+          label=r"ring, $L\mathcal{F}/\pi$ @ plotted design")
+a[2].axvline(dOm[plot_i_fsr] / (2 * np.pi) * 1e-12, color="r", ls=":", label="1 plotted FSR")
 a[2].set_xlabel(r"$\Delta\Omega/2\pi$ (THz)"); a[2].set_ylabel(r"sinc$^2$")
 a[2].legend(fontsize=7); a[2].grid(alpha=.3); a[2].set_title("(c) phase matching")
 f1.suptitle("[T4-1] Straight SOI waveguide: dispersion and phase matching")
 f1.tight_layout(); f1.savefig("lean_fig1_T4-1.png", dpi=170); plt.close(f1)
 
-span = 2.6 * FSR_nm
+# -------------------------------------------------------------------------
+# Optimized spectrum / transmission figure
+# -------------------------------------------------------------------------
+span = 2.6 * plot_FSR_nm
 lams = np.linspace(pump_nm - span, pump_nm + span, 20001)
-out = np.array([series_rings(l, typ["K1_percent"] / 100, typ["A_dB_per_cm"]) for l in lams])
+out = np.array([
+    series_rings_geom(l, plot_geom, plot_K1, plot_K2, plot_K3, plot_A)
+    for l in lams
+])
+
 f2, a = plt.subplots(3, 1, figsize=(9, 9), sharex=True)
-a[0].plot(lams - pump_nm, abs(out[:, 2]) ** 2 / (abs(out[:, 2]) ** 2).max(), lw=.8)
+a[0].plot(lams - pump_nm, abs(out[:, 2]) ** 2 / max((abs(out[:, 2]) ** 2).max(), 1e-300), lw=.8)
 a[0].set_ylabel("ring 1\n(generator)")
-a[1].plot(lams - pump_nm, abs(out[:, 3]) ** 2 / (abs(out[:, 3]) ** 2).max(),
-          lw=.8, color="tab:orange"); a[1].set_ylabel("ring 2\n(filter)")
+a[0].set_title(f"(a) field buildup with optimized R1 = {plot_geom['R1_um']:.1f} um")
+
+a[1].plot(lams - pump_nm, abs(out[:, 3]) ** 2 / max((abs(out[:, 3]) ** 2).max(), 1e-300),
+          lw=.8, color="tab:orange")
+a[1].set_ylabel("ring 2\n(filter)")
+a[1].set_title(f"(b) field buildup with optimized R2 = {plot_geom['R2_um']:.1f} um")
+
 a[2].semilogy(lams - pump_nm, abs(out[:, 1]) ** 2, color="tab:green", label=r"$T_{drop}$")
 a[2].semilogy(lams - pump_nm, abs(out[:, 0]) ** 2, color="tab:red", label=r"$T_{through}$")
-a[2].axhline(1e-10, color="gray", ls="--", label="-100 dB target")
-a[2].set_ylim(1e-12, 3); a[2].legend(fontsize=8); a[2].set_ylabel("transmission")
+a[2].axhline(1e-10, color="gray", ls="--", label="-100 dB reference")
+a[2].scatter([0.0], [plot_KP["Tp"]], marker="x", s=60, label="pump")
+a[2].scatter([plot_lam_s - pump_nm], [plot_KP["Ts"]], marker="o", s=35, label="signal")
+a[2].scatter([plot_lam_i - pump_nm], [plot_KP["Ti"]], marker="o", s=35, label="idler")
+a[2].set_ylim(1e-12, 3)
+a[2].legend(fontsize=8)
+a[2].set_ylabel("transmission")
 a[2].set_xlabel(r"$\lambda-\lambda_p$ (nm)")
+a[2].set_title(
+    f"(c) optimized spectrum: rej = {plot_KP['rej']:.2f} dB, "
+    f"Ts = {plot_KP['Ts']:.3f}, Ti = {plot_KP['Ti']:.3f}"
+)
 for ax in a:
-    for l_, col in ((pump_nm, "k"), (lam_s, "r"), (lam_i, "b")):
+    for l_, col in ((pump_nm, "k"), (plot_lam_s, "r"), (plot_lam_i, "b")):
         ax.axvline(l_ - pump_nm, color=col, ls=":", lw=1)
     ax.grid(alpha=.3)
-f2.suptitle("[T4-4] The two combs and T(omega) [RABUS07 Eqs. 2.58-2.63]")
+f2.suptitle("[T4-4] The two combs and T(omega) for the optimized two-ring design")
 f2.tight_layout(); f2.savefig("lean_fig2_T4-4.png", dpi=170); plt.close(f2)
 
-K1s = np.logspace(np.log10(P["K1_percent"][0]), np.log10(P["K1_percent"][2]), 20)
-As = np.linspace(P["A_dB_per_cm"][0], P["A_dB_per_cm"][2], 10)
-rK = [kpis(x, typ["A_dB_per_cm"]) for x in K1s]
-rA = [kpis(typ["K1_percent"], x) for x in As]
-f3, a = plt.subplots(1, 3, figsize=(15, 4.2))
-a[0].semilogx(K1s, [r["rej"] for r in rK], "o-", label="rejection")
-a[0].axhspan(100, 120, color="red", alpha=.12, label="target")
-a[0].set_xlabel("K1 (%)"); a[0].set_ylabel("dB"); a[0].legend(fontsize=7); a[0].grid(alpha=.3)
-ab = a[0].twinx(); ab.semilogx(K1s, [r["Ts"] for r in rK], "s--", color="tab:orange")
-ab.set_ylabel(r"$T_{drop}$(s)", color="tab:orange"); a[0].set_title("(a) bus coupling")
-a[1].plot(As, [r["Ts"] for r in rA], "o-")
-a[1].set_xlabel("loss A (dB/cm)"); a[1].set_ylabel(r"$T_{drop}$(signal)"); a[1].grid(alpha=.3)
-a[1].set_title("(b) loss [MA17 1 dB/cm; SAVANIER16 0.74-1.23]")
+# -------------------------------------------------------------------------
+# Sweeps referenced to the optimized design
+# -------------------------------------------------------------------------
+K1s = np.geomspace(K13_MIN, K13_MAX, 60)
+As = np.linspace(P["A_dB_per_cm"][0], P["A_dB_per_cm"][2], 40)
+rK = [kpis_radius(plot_geom, K1_, plot_K2, plot_K3, plot_A) for K1_ in K1s]
+rA = [kpis_radius(plot_geom, plot_K1, plot_K2, plot_K3, A_) for A_ in As]
+
 gg = np.linspace(gaps.min(), gaps.max(), 240)
-a[2].semilogy(gaps, kzv, "o", label="Femwell supermodes")
-a[2].semilogy(gg, [kappa_z_interp(x) for x in gg], "-",
-              label="PCHIP between FEMWELL samples")
-a[2].set_xlabel("gap (nm)"); a[2].set_ylabel(r"$\kappa_z$ (rad/um)")
-a[2].legend(fontsize=7); a[2].grid(alpha=.3, which="both")
-a[2].set_title("(c) coupling vs gap [CHROST15 4.3]")
-f3.suptitle("[T4-4/4b] Parameter sweeps and the coupling-gap relation")
+g1_opt = gap_for_K(plot_K1)
+g12_opt = gap_for_K(plot_K2)
+g3_opt = gap_for_K(plot_K3)
+
+f3, a = plt.subplots(1, 3, figsize=(15, 4.2))
+a[0].semilogx(100*K1s, [r["rej"] for r in rK], "o-", ms=3, label="rejection")
+a[0].axvline(100*plot_K1, color="k", ls=":", label="optimized K1")
+a[0].set_xlabel("K1 (%) with K2,K3 fixed at optimum")
+a[0].set_ylabel("pump rejection (dB)")
+a[0].grid(alpha=.3)
+a[0].legend(fontsize=7)
+ab = a[0].twinx()
+ab.semilogx(100*K1s, [r["Ts"] for r in rK], "s--", ms=3, color="tab:orange", label=r"$T_s$")
+ab.set_ylabel(r"$T_s$", color="tab:orange")
+a[0].set_title("(a) K1 cut around the optimized design")
+
+a[1].plot(As, [r["rej"] for r in rA], "o-", ms=3, label="rejection")
+a[1].axvline(plot_A, color="k", ls=":", label="selected loss")
+a[1].set_xlabel("loss A (dB/cm)")
+a[1].set_ylabel("pump rejection (dB)")
+a[1].grid(alpha=.3)
+ac = a[1].twinx()
+ac.plot(As, [r["Ts"] for r in rA], "s--", ms=3, color="tab:orange", label=r"$T_s$")
+ac.set_ylabel(r"$T_s$", color="tab:orange")
+h1, l1_ = a[1].get_legend_handles_labels()
+h2, l2_ = ac.get_legend_handles_labels()
+a[1].legend(h1+h2, l1_+l2_, fontsize=7, loc="best")
+a[1].set_title("(b) loss sweep at the optimized couplings")
+
+a[2].semilogy(gaps, kzv, "o", label="FEMWELL supermodes")
+a[2].semilogy(gg, [kappa_z_interp(x) for x in gg], "-", label="PCHIP between FEMWELL samples")
+for g_, lbl_ in ((g1_opt, "g1 opt"), (g12_opt, "g12 opt"), (g3_opt, "g3 opt")):
+    if np.isfinite(g_):
+        a[2].axvline(g_, ls=":", label=f"{lbl_} = {g_:.1f} nm")
+a[2].set_xlabel("gap (nm)")
+a[2].set_ylabel(r"$\kappa_z$ (rad/um)")
+a[2].legend(fontsize=7)
+a[2].grid(alpha=.3, which="both")
+a[2].set_title("(c) coupling-vs-gap with optimized physical gaps")
+f3.suptitle("[T4-4/4b] Sweeps referenced to the optimized two-ring design")
 f3.tight_layout(); f3.savefig("lean_fig3_sweeps.png", dpi=170); plt.close(f3)
 
+# -------------------------------------------------------------------------
+# Variability figure kept, but referenced to the plotted optimized design.
+# -------------------------------------------------------------------------
+plot_tol = [
+    kpis_3K(plot_K1, plot_K2, plot_K3, plot_A, dn2=dn_dw*x)
+    for x in dw
+]
+plot_Ts_t = np.array([t["Ts"] for t in plot_tol])
+plot_ER_t = np.array([t["ER"] for t in plot_tol])
+
 f4, a = plt.subplots(1, 2, figsize=(11, 4.3))
-a[0].plot(dw, Ts_t, color="tab:orange"); a[0].set_xlim(-0.5, 0.5)
-a[0].axhline(0.5 * KP["Ts"], color="gray", ls="--", lw=1)
-a[0].set_xlabel("differential width error (nm)"); a[0].set_ylabel(r"$T_{drop}$(signal)")
-a[0].grid(alpha=.3); a[0].set_title("(a) DIFFERENTIAL -- breaks the Vernier")
-ab = a[0].twinx(); ab.plot(dw, ER_t, color="tab:green"); ab.set_ylabel("extinction (dB)", color="tab:green")
+a[0].plot(dw, plot_Ts_t, color="tab:orange"); a[0].set_xlim(-0.5, 0.5)
+a[0].axhline(0.5 * plot_KP["Ts"], color="gray", ls="--", lw=1)
+a[0].set_xlabel("differential width error (nm)")
+a[0].set_ylabel(r"$T_{drop}$(signal)")
+a[0].grid(alpha=.3)
+a[0].set_title("(a) DIFFERENTIAL -- optimized design")
+ab = a[0].twinx(); ab.plot(dw, plot_ER_t, color="tab:green"); ab.set_ylabel("extinction (dB)", color="tab:green")
 dwc = np.linspace(-5, 5, 50)
 a[1].plot(dwc, dwc * shift * 1e-3, color="tab:blue", label="first-order comb shift")
-# FWHM/2 is the directly relevant resonance-alignment scale; it is DERIVED from Q_L.
-_fwhm_nm = pump_nm / Q_L
-a[1].axhspan(-_fwhm_nm/2, _fwhm_nm/2, color="green", alpha=.12,
+_plot_fwhm_nm = pump_nm / plot_QL
+a[1].axhspan(-_plot_fwhm_nm/2, _plot_fwhm_nm/2, color="green", alpha=.12,
              label=r"$\pm$FWHM/2 (derived)")
-# FSR/2 is shown only as the distance to the midpoint between longitudinal modes,
-# NOT as an alignment tolerance.
-a[1].axhline(+FSR_nm/2, color="gray", ls=":", lw=1, label=r"$\pm$FSR/2 reference")
-a[1].axhline(-FSR_nm/2, color="gray", ls=":", lw=1)
+a[1].axhline(+plot_FSR_nm/2, color="gray", ls=":", lw=1, label=r"$\pm$FSR/2 reference")
+a[1].axhline(-plot_FSR_nm/2, color="gray", ls=":", lw=1)
 a[1].set_xlabel("common-mode width error (nm)"); a[1].set_ylabel("resonance shift (nm)")
-a[1].legend(fontsize=7); a[1].grid(alpha=.3); a[1].set_title("(b) COMMON -- shifts both combs")
-f4.suptitle("[T4-5] First-order width sensitivity [THOMSON16: fluctuations of order 5 nm]")
+a[1].legend(fontsize=7); a[1].grid(alpha=.3); a[1].set_title("(b) COMMON -- plotted design")
+f4.suptitle("[T4-5] First-order width sensitivity of the optimized two-ring design")
 f4.tight_layout(); f4.savefig("lean_fig4_T4-5.png", dpi=170); plt.close(f4)
 print("\nFigures: lean_fig0_mode, lean_fig1_T4-1, lean_fig2_T4-4, lean_fig3_sweeps,")
 print("         lean_fig_OPT_K1, lean_fig_OPT_3K, lean_fig_OPT_Radii, lean_fig4_T4-5")
