@@ -16,6 +16,9 @@ Consignes addressed (Task 4 statement + minutes of 09/09):
   [T4-OPT] Baseline sweep-based optimization of K1 with Butterworth K2,K3.
   [T4-OPT3] Independent circuit-level optimization of K1,K2,K3, constrained
             by the physically simulated FEMWELL coupling range.
+  [T4-OPTR] Radius optimization under the 2:1 Vernier constraint:
+            R2 = R1/2, with the documented 100-200 GHz FSR design interval.
+            Includes both a radius-only sweep and a joint (R1,K1,K2,K3) search.
   [T4-5] Effect of clean-room parameter variability.
   [T4-6] Feasibility: what is certain, assumed, missing.
 
@@ -84,7 +87,7 @@ P = OrderedDict(
     # 220 nm is the standard foundry SOI thickness; 450-550 nm keeps the guide
     # single-mode TE at 1550 nm. 500x220 nm is also the cross-section CHROST15
     # sec 4.1.6 analyses, which lets us validate the coupling against its Fig. 4.14.
-    width_nm     = (450, 500, 550),
+    width_nm     = (400, 400, 400),
     height_nm    = (220, 220, 220),
     # Propagation loss. MA17 measures 1 dB/cm on test sites; SAVANIER16 measures
     # 0.74 and 1.23 dB/cm by cutback; MEDINA24 sec 3.3.2 infers <1 dB/cm oxide-clad.
@@ -92,9 +95,11 @@ P = OrderedDict(
     # [SAVANIER16] measured cutback values 0.74 and 1.23 dB/cm.
     # [MEDINA24] rough estimate ~1.5 dB/cm for the C2N rings.
     A_dB_per_cm  = (0.5, 0.5, 1.5),
-    # Target FSR. MEDINA24 sec 3.3.2 designs for 100-200 GHz to match the telecom
-    # grid. THIS FIXES THE RADIUS -- it is not a free parameter.
-    FSR_GHz      = (50.0, 100.0, 200.0),
+    # Target FSR / radius-design interval.
+    # [MEDINA24 sec 3.3.2] uses the 100-200 GHz regime.  The nominal case is
+    # 100 GHz; [T4-OPTR] sweeps only this documented interval rather than
+    # inventing an independent radius range.
+    FSR_GHz      = (100.0, 100.0, 200.0),
     # Bus-to-ring POWER coupling K1 = |kappa_1|^2.
     # [SAVANIER16] experimentally inferred |kappa|^2 values around 0.005 and 0.018.
     # [STRAIN15] a tunable Si microring spans ~0.22 down to <0.005 and crosses
@@ -103,7 +108,7 @@ P = OrderedDict(
     K1_percent   = (0.5, 1.8, 22.0),
     # Coupling length of the straight section (CHROST15 Eq. 4.8 needs one).
     L_couple_um  = (2.0, 5.0, 15.0),
-    pump_nm      = (1550.0, 1550.0, 1550.0),
+    pump_nm      = (1580.0, 1580.0, 1580.0),
 )
 typ = {k: v[1] for k, v in P.items()}
 pump_nm = typ["pump_nm"]
@@ -162,37 +167,81 @@ print("=" * 78)
 mesh0 = strip_mesh(w_um, h_um)
 m_te0 = te0(mesh0, pump_nm * 1e-3)
 m_te0.show("I", colorbar=True)
-plt.title(f"TE0 intensity, {typ['width_nm']:.0f}x{typ['height_nm']:.0f} nm SOI strip @ 1550 nm")
+plt.title(f"TE0 intensity, {typ['width_nm']:.0f}x{typ['height_nm']:.0f} nm SOI strip @ {pump_nm:.0f} nm")
 plt.savefig("lean_fig0_mode.png", dpi=160); plt.close()
 
-wl = np.linspace(1450, 1650, 13)
+# -------------------------------------------------------------------------
+# GVD -- STRICTLY FOLLOW THE OFFICIAL FEMWELL "Calculate GVD of waveguide"
+# EXAMPLE:
+# https://helgegehring.github.io/femwell/photonics/examples/calculate_GVD.html
+#
+# The official example:
+#   1) sweeps wavelength on ONE fixed mesh;
+#   2) selects the mode with the largest TE fraction;
+#   3) fits n_eff(lambda_nm) with UnivariateSpline(s=0, k=3);
+#   4) differentiates THAT spline twice directly;
+#   5) evaluates
+#          D = -lambda/c * d^2 n_eff / d lambda^2
+#      with lambda in nm and c = 2.99792e-7 km/ps,
+#      giving D directly in ps/(nm km).
+#
+# We intentionally do NOT calculate D through a finite difference of n_g here.
+# The geometry/materials are ours; the numerical GVD procedure is FEMWELL's.
+# -------------------------------------------------------------------------
+wavelength_range = [1500.0, 1600.0]  # nm: spectral window of our GVD study
+wavelength_points = 50               # same number of samples as FEMWELL example
+wl = np.linspace(wavelength_range[0], wavelength_range[1], wavelength_points)
+
 neff_v, aeff_v = [], []
 for l in wl:
     m = te0(mesh0, l * 1e-3)
-    neff_v.append(np.real(m.n_eff)); aeff_v.append(np.real(m.calculate_effective_area()))
-neff_v, aeff_v = np.array(neff_v), np.array(aeff_v)
+    neff_v.append(np.real(m.n_eff))
+    aeff_v.append(np.real(m.calculate_effective_area()))
+
+neff_v = np.asarray(neff_v)
+aeff_v = np.asarray(aeff_v)
+
+# Exact FEMWELL-example spline construction.
 spl = UnivariateSpline(wl, neff_v, s=0, k=3)
-d1 = spl.derivative(1)
+spl_d1 = spl.derivative(n=1)
+spl_d2 = spl.derivative(n=2)
+
 n_eff = lambda l: spl(l)
-n_g = lambda l: spl(l) - l * d1(l)                     # [RABUS07 Eq. 2.20]
+
+# Group index is still needed later for FSR/Q. This follows directly from
+# n_g = n_eff - lambda dn_eff/dlambda, using the SAME spline.
+n_g = lambda l: spl(l) - l * spl_d1(l)
+
 A_eff = float(UnivariateSpline(wl, aeff_v, s=0, k=3)(pump_nm))
 
+# EXACT unit convention used by the official FEMWELL example:
+# c = 2.99792e-7 km/ps, wavelength is in nm, spline second derivative is 1/nm^2.
+c_km_per_ps_femwell = 2.99792e-7
 
-def beta2(l):
-    """beta2 = (1/c) dn_g/domega. D = -(2 pi c/lambda^2) beta2 [FEMWELL GVD example]."""
-    dl = 1.0
-    dng_dl = (n_g(l + dl) - n_g(l - dl)) / (2 * dl * 1e-9)
-    return (dng_dl / (-2 * np.pi * c / (l * 1e-9) ** 2)) / c
+def D_ps(l_nm):
+    """GVD D [ps/(nm km)] -- direct FEMWELL-example formula."""
+    return -l_nm / c_km_per_ps_femwell * spl_d2(l_nm)
 
+def beta2(l_nm):
+    """beta2 [s^2/m], derived AFTER D; GVD itself is computed only by FEMWELL's method."""
+    lam_m = l_nm * 1e-9
+    D_SI = D_ps(l_nm) * 1e-6  # 1 ps/(nm km) = 1e-6 s/m^2
+    return -D_SI * lam_m**2 / (2*np.pi*c)
 
-D_ps = lambda l: -(2 * np.pi * c / (l * 1e-9) ** 2) * beta2(l) * 1e12 * 1e-9 * 1e3
-print(f"n_eff = {n_eff(pump_nm):.5f}   n_g = {n_g(pump_nm):.4f}   A_eff = {A_eff:.3f} um^2")
+print(f"n_eff = {n_eff(pump_nm):.5f}   n_g = {n_g(pump_nm):.4f}   "
+      f"A_eff = {A_eff:.3f} um^2")
 print(f"TE fraction = {np.real(m_te0.te_fraction):.3f}, power in core = "
       f"{np.real(m_te0.calculate_power(elements='core')):.3f}")
-print(f"beta2 = {beta2(pump_nm):.3e} s^2/m,  D = {D_ps(pump_nm):+.0f} ps/(nm km) -> "
+print(f"beta2 = {beta2(pump_nm):.3e} s^2/m,  "
+      f"D = {D_ps(pump_nm):+.3f} ps/(nm km) -> "
       f"{'ANOMALOUS' if D_ps(pump_nm) > 0 else 'normal'}")
-print("  MEDINA24 sec 3.3.1: 'small anomalous dispersion is generally considered the")
-print("  most favorable case' for SFWM -> this cross-section is in the right regime.")
+
+if D_ps(pump_nm) > 0 and abs(D_ps(pump_nm)) < 100:
+    print("  This point is in a small-anomalous-D regime.")
+elif D_ps(pump_nm) > 0:
+    print("  D is anomalous, but not close to zero.")
+else:
+    print("  D is normal; this point is NOT in the small-anomalous-D regime.")
 
 # Phase matching. Delta_k = k_s + k_i - 2 k_p, omega_s,i = omega_p +/- Delta_Omega.
 omega_p = 2 * np.pi * c / (pump_nm * 1e-9)
@@ -965,6 +1014,331 @@ f3k.savefig("lean_fig_OPT_3K.png", dpi=170)
 plt.close(f3k)
 
 
+# =============================================================================
+# [T4-OPTR] RADIUS OPTIMIZATION UNDER THE 2:1 VERNIER CONSTRAINT
+# =============================================================================
+# WHY THERE IS ONLY ONE INDEPENDENT RADIUS VARIABLE
+# -------------------------------------------------
+# The present architecture assumes a 2:1 Vernier relation.  With the same
+# straight-guide n_eff used for both rings, imposing
+#
+#       L2 = L1 / 2
+#
+# makes theta2 = theta1/2 identically.  Therefore R1 and R2 are NOT treated as
+# two unrelated optimization variables: R2 follows R1 through the architectural
+# constraint R2 = R1/2.  Allowing both radii to vary independently would break
+# the parity condition unless an additional resonance-alignment constraint were
+# introduced.  No independent R2 range is therefore invented here.
+#
+# RANGE
+# -----
+# [MEDINA24 sec 3.3.2, as already used in the parameter table]
+# the investigated FSR regime is 100-200 GHz.  Instead of inventing a radius
+# interval, the code sweeps that documented FSR interval and maps every point to
+# a physical round-trip length / equivalent radius using:
+#
+#       FSR_nu ~= c/(n_g L)                     [RABUS07 Eq. 2.21]
+#       m lambda_p = n_eff(lambda_p) L          [RABUS07 Eq. 2.71]
+#
+# The second equation is enforced exactly by snapping to the nearest ODD pump
+# order m1, which preserves the 2:1 parity of the Vernier architecture.
+#
+# OBJECTIVE
+# ---------
+# The same system-level FILTER objective as [T4-OPT3] is used:
+#
+#       maximize (Ts*Ti)^N
+#
+# where N is the minimum number of ideal identical cascaded stages required to
+# reach >= REJ_TARGET_DB.  No new objective is introduced.
+#
+# Two studies are reported:
+#   (1) radius-only sweep with the selected 3K couplings held fixed;
+#   (2) JOINT grid search over (FSR/R1, K1, K2, K3).
+#
+# IMPORTANT LIMITATION
+# --------------------
+# K(g) is kept equal to the local straight-coupler FEMWELL map from [T4-4b].
+# Thus the present optimization assumes that changing the ring radius does not
+# change the local directional-coupler law.  This is appropriate only to the
+# level of the local-coupler model used here.  If curvature-dependent coupling
+# is to be included, a separate physical coupler simulation must be run for
+# each radius; that physics is NOT claimed by this section.
+
+print("\n" + "="*78)
+print("[T4-OPTR] Radius optimization under R2 = R1/2")
+print("="*78)
+
+
+def geometry_from_fsr_target(fsr_target_GHz):
+    """Build a self-consistent pump-resonant geometry from a target FSR.
+
+    Step 1: first-order R from FSR = c/(n_g 2 pi R).
+    Step 2: choose the nearest ODD pump order m1.
+    Step 3: enforce exact pump resonance L1 = m1*lambda_p/n_eff.
+    Step 4: impose L2 = L1/2 (2:1 Vernier assumption).
+    Step 5: solve the exact adjacent R1 resonances for signal and idler.
+    """
+    # First-order circumference/radius from the FSR target [RABUS07 2.21].
+    L_guess = c / (n_g(pump_nm) * fsr_target_GHz * 1e9)
+    R_guess_um = L_guess / (2*np.pi) * 1e6
+
+    # Exact pump resonance [RABUS07 2.71]; odd m1 preserves the 2:1 parity.
+    m1_ = round(n_eff(pump_nm) * L_guess / (pump_nm * 1e-9))
+    if m1_ % 2 == 0:
+        # Choose the closest odd order, not always m+1.
+        m_lo = m1_ - 1
+        m_hi = m1_ + 1
+        L_lo = m_lo * pump_nm * 1e-9 / n_eff(pump_nm)
+        L_hi = m_hi * pump_nm * 1e-9 / n_eff(pump_nm)
+        m1_ = m_lo if abs(L_lo - L_guess) <= abs(L_hi - L_guess) else m_hi
+
+    L1_ = m1_ * pump_nm * 1e-9 / n_eff(pump_nm)
+    L2_ = L1_ / 2.0
+    R1_ = L1_ / (2*np.pi) * 1e6
+    R2_ = L2_ / (2*np.pi) * 1e6
+
+    fsr_GHz_actual_ = c / (n_g(pump_nm) * L1_) * 1e-9
+    fsr_nm_ = pump_nm**2 / (n_g(pump_nm) * L1_ * 1e9)
+
+    ls_ = resonance(L1_, m1_ + 1, pump_nm - fsr_nm_)
+    li_ = resonance(L1_, m1_ - 1, pump_nm + fsr_nm_)
+
+    return dict(
+        fsr_target_GHz=float(fsr_target_GHz),
+        fsr_GHz=float(fsr_GHz_actual_),
+        FSR_nm=float(fsr_nm_),
+        m1=int(m1_),
+        L1=float(L1_),
+        L2=float(L2_),
+        R1_um=float(R1_),
+        R2_um=float(R2_),
+        ls=float(ls_),
+        li=float(li_),
+        R_guess_um=float(R_guess_um)
+    )
+
+
+def series_rings_geom(l, geom, K1, K2, K3, A):
+    """Same Rabus two-ring equations, but with a local radius/circumference."""
+    k1_, t1_, k2_, t2_, k3_, t3_ = couplers_independent(K1, K2, K3)
+    L1_, L2_ = geom["L1"], geom["L2"]
+
+    a1_ = np.sqrt(alpha_of(A, L1_)) * np.exp(1j * theta(l, L1_) / 2)
+    a2_ = np.sqrt(alpha_of(A, L2_)) * np.exp(1j * theta(l, L2_) / 2)
+
+    M_ = np.array([
+        [1 - t1_*t2_*a1_**2,       t1_*a1_*k2_*a2_],
+        [-t3_*a2_*k2_*a1_,         1 - t3_*t2_*a2_**2]
+    ])
+    E1a_, E2b_ = np.linalg.solve(M_, [-k1_, 0.0])
+    E1b_ = t2_*a1_*E1a_ - k2_*a2_*E2b_
+    E2a_ = k2_*a1_*E1a_ + t2_*a2_*E2b_
+
+    E_through_ = t1_ + k1_*a1_*E1b_
+    E_drop_ = k3_*a2_*E2a_
+    return E_through_, E_drop_, E1a_, E2a_
+
+
+def kpis_radius(geom, K1, K2, K3, A):
+    """KPIs for one radius/FSR geometry and one independent-coupling triplet."""
+    try:
+        Tp_ = abs(series_rings_geom(pump_nm, geom, K1, K2, K3, A)[1])**2
+        Ts_ = abs(series_rings_geom(geom["ls"], geom, K1, K2, K3, A)[1])**2
+        Ti_ = abs(series_rings_geom(geom["li"], geom, K1, K2, K3, A)[1])**2
+    except np.linalg.LinAlgError:
+        return dict(Tp=np.nan, Ts=np.nan, Ti=np.nan, rej=np.nan,
+                    pair_pass=np.nan, N=10**9, pair_survival=np.nan)
+
+    rej_ = -10*np.log10(max(Tp_, 1e-300))
+    N_ = max(1, int(np.ceil(REJ_TARGET_DB/max(rej_, 1e-12))))
+    pair_pass_ = Ts_*Ti_
+    pair_survival_ = pair_pass_**N_
+
+    return dict(
+        Tp=Tp_, Ts=Ts_, Ti=Ti_, rej=rej_,
+        pair_pass=pair_pass_, N=N_,
+        rej_total=N_*rej_,
+        pair_survival=pair_survival_
+    )
+
+
+# -------------------------------------------------------------------------
+# (1) Radius-only sweep with the selected 3K optimum held fixed
+# -------------------------------------------------------------------------
+# [NUMERICAL CHOICE] 13 points simply resolve the documented 100-200 GHz range.
+FSR_grid_R = np.linspace(P["FSR_GHz"][0], P["FSR_GHz"][2], 13)
+
+radius_sweep = []
+for fsr_target_ in FSR_grid_R:
+    geom_ = geometry_from_fsr_target(fsr_target_)
+    r_ = kpis_radius(
+        geom_,
+        best_filter_3K["K1"],
+        best_filter_3K["K2"],
+        best_filter_3K["K3"],
+        typ["A_dB_per_cm"]
+    )
+    radius_sweep.append({**geom_, **r_})
+
+best_radius_fixedK = max(radius_sweep, key=lambda r: r["pair_survival"])
+
+print("\nRADIUS-ONLY SWEEP -- K1,K2,K3 fixed at the selected 3K optimum")
+print(f"  documented FSR interval = {P['FSR_GHz'][0]:.0f}-{P['FSR_GHz'][2]:.0f} GHz")
+print(f"  selected target FSR = {best_radius_fixedK['fsr_target_GHz']:.2f} GHz")
+print(f"  actual FSR = {best_radius_fixedK['fsr_GHz']:.3f} GHz")
+print(f"  R1 = {best_radius_fixedK['R1_um']:.3f} um")
+print(f"  R2 = {best_radius_fixedK['R2_um']:.3f} um")
+print(f"  m1 = {best_radius_fixedK['m1']}")
+print(f"  rejection/stage = {best_radius_fixedK['rej']:.2f} dB")
+print(f"  Ts = {best_radius_fixedK['Ts']:.5f}, Ti = {best_radius_fixedK['Ti']:.5f}")
+print(f"  N = {best_radius_fixedK['N']}")
+print(f"  pair survival = {best_radius_fixedK['pair_survival']:.5e}")
+
+
+# -------------------------------------------------------------------------
+# (2) Joint search: radius + K1 + K2 + K3
+# -------------------------------------------------------------------------
+# We reuse exactly the same physically constrained K grids from [T4-OPT3].
+# No new coupling range is introduced.
+#
+# Total number of circuit points:
+#     len(FSR_grid_R) * len(K1_grid_3) * len(K2_grid_3) * len(K3_grid_3)
+# = 13 * 22 * 26 * 22 = 163,592
+#
+# These are algebraic 2x2 solves only; there are NO extra FEMWELL solves here.
+
+best_per_radius = []
+
+for fsr_target_ in FSR_grid_R:
+    geom_ = geometry_from_fsr_target(fsr_target_)
+    local_best_ = None
+
+    for K1_ in K1_grid_3:
+        for K2_ in K2_grid_3:
+            for K3_ in K3_grid_3:
+                r_ = kpis_radius(geom_, K1_, K2_, K3_, typ["A_dB_per_cm"])
+                if not np.isfinite(r_["pair_survival"]):
+                    continue
+
+                cand_ = {
+                    **geom_, **r_,
+                    "K1": float(K1_), "K2": float(K2_), "K3": float(K3_)
+                }
+
+                if (local_best_ is None or
+                        cand_["pair_survival"] > local_best_["pair_survival"]):
+                    local_best_ = cand_
+
+    best_per_radius.append(local_best_)
+
+best_joint_R3K = max(best_per_radius, key=lambda r: r["pair_survival"])
+
+print("\nJOINT OPTIMUM -- (R1,R2 constrained 2:1) + K1 + K2 + K3")
+print("  objective: maximize (Ts*Ti)^N with total ideal rejection >= 100 dB")
+print(f"  target FSR = {best_joint_R3K['fsr_target_GHz']:.2f} GHz")
+print(f"  actual FSR = {best_joint_R3K['fsr_GHz']:.3f} GHz")
+print(f"  R1 = {best_joint_R3K['R1_um']:.3f} um")
+print(f"  R2 = {best_joint_R3K['R2_um']:.3f} um")
+print(f"  m1 = {best_joint_R3K['m1']}")
+print(f"  K1 = {100*best_joint_R3K['K1']:.6f} %")
+print(f"  K2 = {100*best_joint_R3K['K2']:.6f} %")
+print(f"  K3 = {100*best_joint_R3K['K3']:.6f} %")
+print(f"  rejection/stage = {best_joint_R3K['rej']:.2f} dB")
+print(f"  Ts = {best_joint_R3K['Ts']:.5f}, Ti = {best_joint_R3K['Ti']:.5f}")
+print(f"  N = {best_joint_R3K['N']}")
+print(f"  total ideal rejection = {best_joint_R3K['rej_total']:.2f} dB")
+print(f"  pair survival = {best_joint_R3K['pair_survival']:.5e}")
+
+print("  physical gaps from the same FEMWELL K(g) map:")
+for nm_, kval_ in (("g1", best_joint_R3K["K1"]),
+                   ("g12", best_joint_R3K["K2"]),
+                   ("g3", best_joint_R3K["K3"])):
+    gv_ = gap_for_K(kval_)
+    print(f"    {nm_:3s} = {gv_:7.2f} nm" if np.isfinite(gv_)
+          else f"    {nm_:3s} = outside simulated K(g)")
+
+# Boundary diagnostics: a boundary optimum must be reported as CONSTRAINED.
+fsr_boundary_ = (
+    abs(best_joint_R3K["fsr_target_GHz"] - P["FSR_GHz"][0]) < 1e-9 or
+    abs(best_joint_R3K["fsr_target_GHz"] - P["FSR_GHz"][2]) < 1e-9
+)
+K1_boundary_ = (
+    abs(best_joint_R3K["K1"] - K13_MIN) < 1e-12 or
+    abs(best_joint_R3K["K1"] - K13_MAX) < 1e-12
+)
+K2_boundary_ = (
+    abs(best_joint_R3K["K2"] - K2_grid_3[0]) < 1e-12 or
+    abs(best_joint_R3K["K2"] - K2_grid_3[-1]) < 1e-12
+)
+K3_boundary_ = (
+    abs(best_joint_R3K["K3"] - K13_MIN) < 1e-12 or
+    abs(best_joint_R3K["K3"] - K13_MAX) < 1e-12
+)
+
+if fsr_boundary_ or K1_boundary_ or K2_boundary_ or K3_boundary_:
+    print("  WARNING: at least one optimized variable lies on a search boundary.")
+    print("  -> interpret this as a CONSTRAINED optimum within the documented/simulated domain.")
+else:
+    print("  The sampled optimum is interior to all investigated parameter bounds.")
+
+
+# -------------------------------------------------------------------------
+# Figure: radius sweep and joint optimum
+# -------------------------------------------------------------------------
+fR, aR = plt.subplots(1, 3, figsize=(15, 4.5))
+
+# (a) physical radii versus actual FSR
+aR[0].plot([r["fsr_GHz"] for r in radius_sweep],
+           [r["R1_um"] for r in radius_sweep], "o-", label="R1")
+aR[0].plot([r["fsr_GHz"] for r in radius_sweep],
+           [r["R2_um"] for r in radius_sweep], "s-", label="R2 = R1/2")
+aR[0].scatter([best_joint_R3K["fsr_GHz"]], [best_joint_R3K["R1_um"]],
+              marker="*", s=120, label="joint optimum R1")
+aR[0].set_xlabel("actual FSR (GHz)")
+aR[0].set_ylabel("equivalent radius (um)")
+aR[0].set_title("(a) radius set by FSR + exact pump order")
+aR[0].grid(alpha=.3)
+aR[0].legend(fontsize=7)
+
+# (b) radius-only response at fixed 3K optimum
+aR[1].plot([r["R1_um"] for r in radius_sweep],
+           [r["rej"] for r in radius_sweep], "o-", label="rejection/stage (dB)")
+aR[1].set_xlabel("R1 (um)")
+aR[1].set_ylabel("pump rejection / stage (dB)")
+aR[1].grid(alpha=.3)
+aR[1].set_title("(b) radius-only sweep; K1,K2,K3 fixed")
+aRb = aR[1].twinx()
+aRb.plot([r["R1_um"] for r in radius_sweep],
+         [r["pair_survival"] for r in radius_sweep], "s--",
+         label="pair survival")
+aRb.set_ylabel(r"$(T_sT_i)^N$")
+
+# combined legend for panel b
+h1, l1_ = aR[1].get_legend_handles_labels()
+h2, l2_ = aRb.get_legend_handles_labels()
+aR[1].legend(h1+h2, l1_+l2_, fontsize=7, loc="best")
+
+# (c) best re-optimized couplings at each radius
+aR[2].plot([r["R1_um"] for r in best_per_radius],
+           [r["pair_survival"] for r in best_per_radius],
+           "o-", label="best K1,K2,K3 at each radius")
+aR[2].scatter([best_joint_R3K["R1_um"]],
+              [best_joint_R3K["pair_survival"]],
+              marker="*", s=140, label="joint optimum")
+aR[2].axvline(R1_um, ls="--", linewidth=1, label="nominal R1")
+aR[2].set_xlabel("R1 (um)")
+aR[2].set_ylabel(r"max $(T_sT_i)^N$")
+aR[2].set_title("(c) joint radius + coupling optimization")
+aR[2].grid(alpha=.3)
+aR[2].legend(fontsize=7)
+
+fR.suptitle("[T4-OPTR] Radius optimization constrained by the 2:1 Vernier architecture")
+fR.tight_layout()
+fR.savefig("lean_fig_OPT_Radii.png", dpi=170)
+plt.close(fR)
+
+
 
 # =============================================================================
 # [T4-5] FABRICATION VARIABILITY
@@ -1106,7 +1480,7 @@ a[1].legend(fontsize=7); a[1].grid(alpha=.3); a[1].set_title("(b) COMMON -- shif
 f4.suptitle("[T4-5] First-order width sensitivity [THOMSON16: fluctuations of order 5 nm]")
 f4.tight_layout(); f4.savefig("lean_fig4_T4-5.png", dpi=170); plt.close(f4)
 print("\nFigures: lean_fig0_mode, lean_fig1_T4-1, lean_fig2_T4-4, lean_fig3_sweeps,")
-print("         lean_fig_OPT_K1, lean_fig_OPT_3K, lean_fig4_T4-5")
+print("         lean_fig_OPT_K1, lean_fig_OPT_3K, lean_fig_OPT_Radii, lean_fig4_T4-5")
 
 
 # =============================================================================
@@ -1128,8 +1502,10 @@ CERTAIN -- every equation is in the supplied material:
 ASSUMED:
   the 2:1 Vernier ratio, read off the supervisor's comb slide (NOT stated
   numerically anywhere -- the single assumption the whole design rests on);
-  lossless, frequency-independent couplers; CW undepleted pump; circular rings
-  with a point coupler; the PGR prefactor calibrated on one measured die.
+  lossless, frequency-independent couplers; CW undepleted pump; the 2:1 Vernier
+  constraint R2 = R1/2; the local K(g) coupler map is reused across the radius
+  sweep (radius-dependent coupler curvature is not simulated); the PGR prefactor
+  is calibrated on one measured die.
 
 MISSING, and known to matter:
   TPA and free carriers -- PGR is an upper bound [SAVANIER16 quantifies TPA at
@@ -1148,7 +1524,10 @@ THE ANSWER TO THE FEASIBILITY QUESTION:
   stage(s) to exceed the 100 dB MEDINA24 requirement.  The independent 3-K
   study tests whether the Rabus/Butterworth coupling constraint is optimal for
   the chosen filter objective, while restricting K1/K2/K3 to couplings represented
-  by the FEMWELL gap simulations. Differential width error is reported only as
-  a first-order equivalent-width sensitivity; the physical requirement is
-  resonance alignment within the loaded linewidth.
+  by the FEMWELL gap simulations.  [T4-OPTR] then varies the radius through the
+  documented 100-200 GHz FSR interval, with R2 = R1/2, and finally performs a
+  joint (radius,K1,K2,K3) grid search using the same system objective.
+  Differential width error is reported only as a first-order equivalent-width
+  sensitivity; the physical requirement is resonance alignment within the
+  loaded linewidth.
 """)
