@@ -63,7 +63,7 @@ hbar = 1.054571817e-34     # J s
 P = OrderedDict(
     # SOI strip cross-section. [REF: THOMSON16] 220 nm standard foundry SOI;
     # 450-550 nm width keeps single-mode TE at 1550 nm [REF: BOG12].
-    width_nm      = (450, 500, 550),
+    width_nm = (370, 400, 410),
     height_nm     = (220, 220, 220),
     # Generator ring radius. [REF: ARXIV2411] R = 19.1 um; [REF: MEDINA24] R = 120 um.
     r1_um         = (5.0, 10.0, 20.0),
@@ -74,7 +74,7 @@ P = OrderedDict(
     # (K1 ~ 1-5 %) [Friday notes]. [REF: MEDINA24] critical at 60-100 nm gaps.
     K1_percent    = (0.5, 3.0, 20.0),
     # Pump. [REF: assignment] 1550 nm.
-    pump_nm       = (1550.0, 1550.0, 1550.0),
+    pump_nm       = (1580.0, 1580.0, 1580.0),
 )
 typ = {k: v[1] for k, v in P.items()}
 pump_nm = typ["pump_nm"]
@@ -125,7 +125,7 @@ def te0(mesh, lam_um):
     eps = b.zeros()
     for dom, nf in {"core": n_Si, "clad": n_SiO2, "box": n_SiO2}.items():
         eps[b.get_dofs(elements=dom)] = nf(lam_um) ** 2
-    modes = compute_modes(b, eps, wavelength=lam_um, num_modes=3, order=1)
+    modes = compute_modes(b, eps, wavelength=lam_um, num_modes=3, order=2)
     return modes.sorted(key=lambda m: -np.real(m.te_fraction))[0]
 
 
