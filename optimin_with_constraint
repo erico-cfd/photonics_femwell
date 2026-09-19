@@ -11,7 +11,7 @@ ONE flat script, sections numbered after the assignment:
   [T4-2]  FWM conversion efficiency and photon-pair rate, straight waveguide.
   [T4-3]  Photon-pair generation in a ring resonator: Q-factors, build-up, PGR.
   [T4-4]  Vernier double-ring design: parameters, six couplings, T(omega), combs,
-          pump extinction vs the 100-120 dB target, cascaded stages.
+          pump extinction vs the 100-120 dB target (single two-ring stage).
   [T4-4b] The six couplings from the real gap: Femwell supermodes + Eq. 4.8.
   [T4-opt] 2-DOF optimization (R1, K1) at A = 0.5 dB/cm.
   [T4-5]  Device-parameter variability from clean-room imperfections.
@@ -341,13 +341,10 @@ K = kpis(typ["r1_um"], typ["A_dB_per_cm"], typ["K1_percent"])
 print(f"T_drop(pump) = {K['Tp']:.2e}  ->  pump rejection at the drop port = {K['rej_dB']:.1f} dB")
 print(f"T_drop(signal) = {K['Ts']:.3f}, T_drop(idler) = {K['Ti']:.3f}, pump build-up = x{K['buildup']:.0f}")
 print(f"Extinction ratio drop(s)/drop(p) = {K['ER_dB']:.1f} dB")
-print("Benchmarks: single Vernier stage ~60 dB, > 100 dB cascaded [ARXIV2411]; "
+print("Benchmarks: single Vernier stage ~60 dB [ARXIV2411]; "
       "CROW > 110 dB [KUMAR20]; Bragg 10x 45->60 dB [MICHON22].")
-
-print("\nRoute to 100-120 dB:")
-for N in (1, 2, 3):
-    print(f"  {N} identical stage(s): rejection = {N*K['rej_dB']:.0f} dB, "
-          f"pairs kept = {K['Ts']**N:.3f} ({-10*np.log10(K['Ts']**N):.1f} dB)")
+print("Single two-ring stage only (no cascade): the 100-120 dB system target is "
+      "reached with the Bragg pre/post-filters, not by stacking ring stages.")
 
 
 # =============================================================================
@@ -506,8 +503,6 @@ print(f"  R1 = {R1_opt:.1f} um, R2 = {R1_opt/2:.1f} um  (FSR = {FSR_target_GHz:.
 print(f"  pump rejection = {best['rej_dB']:.1f} dB,  T_drop(signal) = {best['Ts']:.3f} "
       f"({-10*np.log10(best['Ts']):.2f} dB IL),  ER = {best['ER_dB']:.1f} dB")
 print(f"  derived couplings: K2 = {k2o**2*100:.4f} %, K3 = {k3o**2*100:.3f} %")
-print(f"  cascade: 1x = {best['rej_dB']:.0f} dB, 2x = {2*best['rej_dB']:.0f} dB, "
-      f"3x = {3*best['rej_dB']:.0f} dB")
 
 # --- figure: Ts and rejection vs K1, with the spec line and the optimum ---
 figk, axk = plt.subplots(figsize=(7.5, 5))
@@ -642,7 +637,8 @@ NOT CAPTURED (and known to matter):
    rejection (~tens of dB). The pump is ~1e9x stronger than the pairs, so even
    after this rejection RESIDUAL PUMP STILL DOMINATES -> physically pump photons
    remain. "T_drop ~ 0" is an idealisation. A realistic answer needs the ABSOLUTE
-   power budget (1e9) + CASCADING to >100 dB + the scattered-light floor.
+   power budget (1e9) + further filter stages (Bragg) to >100 dB + the
+   scattered-light floor.
  - TPA / free-carrier absorption -> PGR is an upper bound (ARXIV2411; MEDINA24).
  - Scattered-light floor: AFIFI21 measured 60 dB vs 157 dB modelled -> model
    rejection is an upper bound.
