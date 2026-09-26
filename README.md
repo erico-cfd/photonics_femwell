@@ -54,3 +54,13 @@ The scripts generate:
 - drop-port transmission spectrum
 - optimized coupling coefficients
 - physical coupler gaps
+
+## Python files
+
+- transfer_function.py — Calculates the waveguide modes and dispersion, sizes the two rings for the Vernier configuration, and simulates the initial through/drop transmission.
+
+- gvd.py — Sweeps the silicon waveguide width and wavelength with FEMWELL to find a geometry with suitable group-velocity dispersion.
+
+- physical_analytic_opt.py — Calculates the coupling coefficients from the analytical design conditions and evaluates buildup, pump rejection, extraction efficiency and coupling-gap sensitivity.
+
+- sweep_opt.py — Sweeps the three coupling coefficients, selects the design satisfying the pump-rejection constraint, calculates the ring buildup and drop transmission, and converts the selected couplings into physical gaps.
