@@ -27,11 +27,7 @@ It calculates:
 
 ### Coupling optimization
 
-A grid sweep is performed over the three coupling coefficients:
-
-- \(K_1\)
-- \(K_2\)
-- \(K_3\)
+A grid sweep is performed over the three coupling coefficients.
 
 For each combination, the code evaluates:
 
