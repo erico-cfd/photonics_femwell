@@ -1,4 +1,4 @@
-Double-Ring Photon-Pair Generator Simulation
+## Double-Ring Photon-Pair Generator Simulation
 
 This repository contains the numerical models used to design and analyze a silicon photonics double-ring source based on spontaneous four-wave mixing (SFWM).
 
