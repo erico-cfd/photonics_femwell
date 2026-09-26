@@ -39,8 +39,6 @@ The final design is selected according to the defined pump-rejection constraint.
 
 ### Physical coupler gaps
 
-FEMWELL is then used to convert the coupling coefficients into physical gaps.
-
 The even and odd supermodes of the directional coupler are calculated, and the relation between coupling and gap is obtained.
 
 The final gaps are also rounded to the assumed fabrication grid (10nm resolution).
