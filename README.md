@@ -59,7 +59,7 @@ The scripts generate:
 
 - transfer_function.py — Calculates the waveguide modes and dispersion, sizes the two rings for the Vernier configuration, and simulates the initial through/drop transmission.
 
-- gvd.py — Sweeps the silicon waveguide width and wavelength with FEMWELL to find a geometry with suitable group-velocity dispersion.
+- gvd.py — Sweeps the silicon waveguide width and wavelength with FEMWELL to find a geometry with suitable group-velocity dispersion (GVD slightly above 0).
 
 - physical_analytic_opt.py — Calculates the coupling coefficients from the analytical design conditions and evaluates buildup, pump rejection, extraction efficiency and coupling-gap sensitivity.
 
