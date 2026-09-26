@@ -33,7 +33,7 @@ For each combination, the code evaluates:
 
 - pump rejection
 - signal/idler transmission
-- intracavity buildup
+- buildup on each ring
 
 The final design is selected according to the defined pump-rejection constraint.
 
